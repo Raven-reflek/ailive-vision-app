@@ -17,6 +17,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "DEFAULT_SERVER", "\"\"")   // 留空:由扫码二维码给出服务器地址
+
+        // ML Kit本地OCR的原生库默认打包x86/x86_64/arm64-v8a/armeabi-v7a四份(单份约11MB),
+        // 但这是装在门店实体安卓手机上的App,只会用到arm64-v8a/armeabi-v7a,x86系列是给
+        // 电脑模拟器用的——只打包真机会用到的架构,APK能小一半还多。
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
     signingConfigs {
