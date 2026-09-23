@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Vision" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/brand</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondaryContainer">#FFF1E7</item>
+        <item name="colorOnSecondaryContainer">#C9500A</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Vision.Dialog</item>
+        <item name="alertDialogTheme">@style/ThemeOverlay.Vision.Dialog</item>
+    </style>
+
+    <!-- 标定页:全屏黑底,不受App主题浅色风格影响,取景框和参考框要在深色背景上看清 -->
+    <style name="Theme.Vision.FullscreenDark" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
+
+    <style name="ThemeOverlay.Vision.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">#FFFFFF</item>
+        <item name="colorOnSurface">#221C17</item>
+        <item name="colorOnSurfaceVariant">#7B7269</item>
+        <item name="colorPrimary">#E8620E</item>
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.Vision.Dialog</item>
+    </style>
+    <style name="ShapeAppearanceOverlay.Vision.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">20dp</item>
+    </style>
+
+    <style name="SecTitle">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">8dp</item>
+        <item name="android:paddingHorizontal">2dp</item>
+        <item name="android:textColor">@color/muted</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.06</item>
+    </style>
+</resources>

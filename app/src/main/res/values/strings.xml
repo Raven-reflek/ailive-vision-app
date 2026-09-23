@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI直播弹幕采集</string>
+
+    <string name="bind_hint">本机将作为专门的弹幕采集设备,用摄像头拍摄另一台直播手机的屏幕。请扫描总部提供的绑定二维码。</string>
+    <string name="bind_scan">扫码绑定门店</string>
+    <string name="bind_pick_image">二维码和手机是同一台?点这里选图片</string>
+    <string name="bind_manual">或手工输入</string>
+    <string name="bind_server_hint">服务器地址</string>
+    <string name="bind_store_hint">门店ID</string>
+    <string name="bind_code_hint">绑定码</string>
+    <string name="bind_do">绑定</string>
+
+    <string name="align_step1_title">第一步:对准直播手机屏幕</string>
+    <string name="align_step1_hint">把另一台正在直播的手机完整放入框内,尽量撑满但不要超出画面,拖动四个角对齐屏幕四角</string>
+    <string name="align_step2_title">第二步:框出弹幕区域</string>
+    <string name="align_step2_hint">拖动矩形框住弹幕滚动的那一块区域,不要包含主播头像、输入框、购物车图标</string>
+    <string name="align_next">下一步</string>
+    <string name="align_finish">完成标定</string>
+    <string name="align_retake">重新截取参考画面</string>
+    <string name="align_too_small">离得有点远,再靠近一点</string>
+    <string name="align_too_large">离得有点近,离远一点</string>
+</resources>

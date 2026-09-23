@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与门店APP同一套配色体系,保持视觉一致 -->
+    <color name="brand">#E8620E</color>
+    <color name="brand_deep">#C9500A</color>
+    <color name="brand_soft">#FFF1E7</color>
+    <color name="brand_line">#F6C9AC</color>
+    <color name="white">#FFFFFF</color>
+    <color name="paper">#F8F6F2</color>
+    <color name="bg_page">#F1EDE6</color>
+    <color name="line">#ECE7DF</color>
+    <color name="ink">#221C17</color>
+    <color name="muted">#7B7269</color>
+    <color name="faint">#B3AA9E</color>
+    <color name="ok">#2F9A5B</color>
+    <color name="ok_soft">#E9F6EE</color>
+    <color name="warn">#C48F14</color>
+    <color name="warn_soft">#FBF3DC</color>
+    <color name="bad">#D63D3D</color>
+    <color name="bad_soft">#FDECEB</color>
+    <color name="off">#C7BFB4</color>
+    <color name="ic_launcher_background">#0F0F0F</color>
+</resources>
