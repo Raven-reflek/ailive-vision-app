@@ -47,6 +47,11 @@ object Api {
         }
     }
 
+    /** 应用内更新检查:{min_code, latest_code, latest_name, apk_url, notes}。
+     * ?app=vision 区分是这个 APP 在查——云服务同时挂着门店APP(缺省 zhubo)和这个视觉采集APP,
+     * 两边版本号完全独立,不传 app 参数会被当成在查门店APP的版本(见云服务 devices.py 的迁移注释)。 */
+    fun version(): JSONObject = call(req("/api/app/version?app=vision"))
+
     /** 扫码绑定:一次性绑定码 → 长效设备 token。二维码内容 {server, store, code} */
     fun bind(server: String, store: String, code: String): JSONObject {
         val body = JSONObject()

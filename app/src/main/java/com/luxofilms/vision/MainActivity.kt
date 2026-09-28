@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
         b.btnCalibrate.setOnClickListener {
             startActivity(Intent(this, CameraAlignActivity::class.java))
         }
+        b.btnCheckUpdate.setOnClickListener { UpdateChecker.check(this, silent = false) }
         b.btnToggleCapture.setOnClickListener {
             if (!Prefs.calibrated) {
                 startActivity(Intent(this, CameraAlignActivity::class.java))
@@ -64,6 +65,10 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         render()
         ui.post(refresh)
+        // 静默检查更新:这个APP只有一个 MainActivity(不像门店APP底部四个tab互相重建导致
+        // onCreate反复触发),onResume 已经够用——每次回到前台查一次,同一版本每次进程只弹一次弹窗
+        // (UpdateChecker.handledCode),不会来回打扰。以前压根没有这个检查,装上就是那个版本。
+        UpdateChecker.check(this, silent = true)
     }
 
     override fun onPause() {
