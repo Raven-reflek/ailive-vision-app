@@ -60,6 +60,49 @@
                 android:visibility="gone" />
         </LinearLayout>
 
+        <!-- 最近识别到的内容:装机/调试时用肉眼核对摄像头认出了什么,不用连电脑翻日志。
+             行数不固定,LinearLayout 由代码动态填充,详见 MainActivity.renderRecognized() -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card_white"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="最近识别到的弹幕"
+                android:textColor="@color/ink"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="核对摄像头认出的文字对不对得上实际弹幕,能看出标定框有没有歪"
+                android:textColor="@color/muted"
+                android:textSize="12sp" />
+
+            <LinearLayout
+                android:id="@+id/recognizedList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/recognizedEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="还没识别到内容(采集开着的话,等弹幕出现在框里就会显示)"
+                android:textColor="@color/faint"
+                android:textSize="13sp" />
+        </LinearLayout>
+
         <Button
             android:id="@+id/btnCalibrate"
             android:layout_width="match_parent"

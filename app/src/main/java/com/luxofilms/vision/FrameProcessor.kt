@@ -31,9 +31,12 @@ object FrameProcessor {
     /** 处理一帧并上传;成功/失败都不抛到调用方之外炸掉采集循环,内部吞掉异常只记日志。
      * 返回值区分"服务端限流"和"其它失败",调用方(CaptureService)据此决定要不要退避——
      * 以前不管什么原因失败都只是静默丢弃、下一帧照样按原节奏再打一次,遇到限流等于白打
-     * (2026-09-28 修的硬伤,详见 CaptureService.RATE_LIMIT_COOLDOWN_MS 处注释)。 */
+     * (2026-09-28 修的硬伤,详见 CaptureService.RATE_LIMIT_COOLDOWN_MS 处注释)。
+     *
+     * 识别出的内容(不管上传成不成功)都记进 RecognizedLog,首页拿它实时展示"摄像头认出了什么"——
+     * 装机/调试时用肉眼比对实际弹幕,比连电脑翻日志方便太多(2026-09-28 加)。 */
     fun process(proxy: ImageProxy, calibration: Calibration): Result {
-        return try {
+        val lines: List<String> = try {
             val rotation = proxy.imageInfo.rotationDegrees
             val raw = proxy.toBitmap()
             val upright = if (rotation != 0) raw.rotated(rotation) else raw
@@ -41,15 +44,23 @@ object FrameProcessor {
             val frontView = PerspectiveUtils.correctToFrontView(upright, calibration.screenQuad, outW = 900, outH = 1400)
             val cropped = PerspectiveUtils.cropRegion(frontView, calibration.danmakuRegion)
             val enhanced = mildContrastEnhance(cropped)
-
-            val lines = recognizeLocally(enhanced)
-            if (lines.isNotEmpty()) Api.visionText(lines)
+            recognizeLocally(enhanced)
+        } catch (e: Exception) {
+            Log.w(TAG, "这一帧处理/识别失败,丢弃:${e.message}")
+            return Result.ERROR
+        }
+        if (lines.isEmpty()) return Result.OK   // 这一帧弹幕区域没识别到文字,不算失败,也没什么好上传的
+        return try {
+            Api.visionText(lines)
+            RecognizedLog.add(lines, uploaded = true)
             Result.OK
         } catch (e: Api.ApiError) {
             Log.w(TAG, "上传失败 HTTP ${e.code}:${e.message}")
+            RecognizedLog.add(lines, uploaded = false)
             if (e.code == 429) Result.RATE_LIMITED else Result.ERROR
         } catch (e: Exception) {
-            Log.w(TAG, "这一帧处理/识别失败,丢弃:${e.message}")
+            Log.w(TAG, "上传失败:${e.message}")
+            RecognizedLog.add(lines, uploaded = false)
             Result.ERROR
         }
     }
