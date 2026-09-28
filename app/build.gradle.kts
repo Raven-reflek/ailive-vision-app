@@ -14,8 +14,8 @@ android {
         applicationId = "com.luxofilms.vision"
         minSdk = 26            // 跟门店APP保持一致的机型下限
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         buildConfigField("String", "DEFAULT_SERVER", "\"\"")   // 留空:由扫码二维码给出服务器地址
 
         // ML Kit本地OCR的原生库默认打包x86/x86_64/arm64-v8a/armeabi-v7a四份(单份约11MB),

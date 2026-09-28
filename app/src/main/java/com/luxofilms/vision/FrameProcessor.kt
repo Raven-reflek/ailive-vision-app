@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.util.Log
 import androidx.camera.core.ImageProxy
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
@@ -21,11 +22,17 @@ import java.util.concurrent.TimeUnit
  * 等Ark那边打通了,把下面 process() 换回"编码JPEG + Api.visionFrame()"即可,其它步骤都不用动。
  */
 object FrameProcessor {
+    private const val TAG = "FrameProcessor"
+
+    enum class Result { OK, RATE_LIMITED, ERROR }
 
     private val recognizer by lazy { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
 
-    /** 处理一帧并上传;成功/失败都不抛到调用方之外炸掉采集循环,内部吞掉异常只记日志。 */
-    fun process(proxy: ImageProxy, calibration: Calibration): Boolean {
+    /** 处理一帧并上传;成功/失败都不抛到调用方之外炸掉采集循环,内部吞掉异常只记日志。
+     * 返回值区分"服务端限流"和"其它失败",调用方(CaptureService)据此决定要不要退避——
+     * 以前不管什么原因失败都只是静默丢弃、下一帧照样按原节奏再打一次,遇到限流等于白打
+     * (2026-09-28 修的硬伤,详见 CaptureService.RATE_LIMIT_COOLDOWN_MS 处注释)。 */
+    fun process(proxy: ImageProxy, calibration: Calibration): Result {
         return try {
             val rotation = proxy.imageInfo.rotationDegrees
             val raw = proxy.toBitmap()
@@ -37,9 +44,13 @@ object FrameProcessor {
 
             val lines = recognizeLocally(enhanced)
             if (lines.isNotEmpty()) Api.visionText(lines)
-            true
+            Result.OK
+        } catch (e: Api.ApiError) {
+            Log.w(TAG, "上传失败 HTTP ${e.code}:${e.message}")
+            if (e.code == 429) Result.RATE_LIMITED else Result.ERROR
         } catch (e: Exception) {
-            false
+            Log.w(TAG, "这一帧处理/识别失败,丢弃:${e.message}")
+            Result.ERROR
         }
     }
 

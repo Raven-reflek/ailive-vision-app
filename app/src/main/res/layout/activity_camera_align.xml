@@ -4,11 +4,16 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <!-- Step1用:实时相机预览 -->
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
+    <!-- Step1用:实时预览帧。特意不用 CameraX 的 PreviewView(它自己内部按 FILL_CENTER 裁剪画面),
+         改成把 ImageAnalysis 吐出来的每一帧位图直接画上来、scaleType=fitCenter(等比缩放不裁剪)——
+         这样店员标定时看到的画面,像素级等于 FrameProcessor 真正拿去做透视变换的那张图,
+         AlignOverlayView 按同一个 fitCenter 规则换算比例坐标才不会框歪(2026-09-28 修的硬伤,详见该类注释)。 -->
+    <ImageView
+        android:id="@+id/livePreview"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:background="#000000" />
 
     <!-- Step2用:透视纠正后的静态参考图,默认隐藏 -->
     <ImageView

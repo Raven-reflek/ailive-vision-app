@@ -50,9 +50,12 @@ object Prefs {
 
     val calibrated: Boolean get() = calibrationJson.isNotEmpty()
 
-    /** 采样频率(fps),真机联调后按云端识别的延迟/成本校准,默认先给一个保守值 */
+    /** 采样频率(fps)。云服务 /api/vision/text 限流是每设备 40次/60秒(server.py VISION_LIMIT),
+     * 换算成持续频率上限约 0.67fps——默认 1.0fps 会稳定超限,约三分之一请求被拒且不重试
+     * (2026-09-28 修的硬伤)。0.5fps(每2秒一次)留出安全余量,真机联调后再按识别延迟/需要的
+     * 实时性校准,但不能超过约 0.6fps,否则持续运行必然触发限流。 */
     var sampleFps: Float
-        get() = sp.getFloat("sample_fps", 1.0f)
+        get() = sp.getFloat("sample_fps", 0.5f)
         set(v) = sp.edit().putFloat("sample_fps", v).apply()
 
     fun clear() = sp.edit().clear().apply()
