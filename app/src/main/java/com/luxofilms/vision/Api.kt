@@ -76,10 +76,15 @@ object Api {
     /**
      * 本地OCR兜底通道(2026-09-23):Ark视觉大模型账号权限问题排查未解时,设备本地(ML Kit)识别出的
      * 文字行直接传文字上来,不传图片,不经过Ark。清洗/去重在服务端 vision_ocr.ingest_local_ocr()。
+     *
+     * 不传 nickname:本地OCR压根认不出弹幕昵称(小字号+彩色+打码,2026-09-23离线测试就证实过),
+     * 与其自己编一个固定假昵称,不如让服务端按"没昵称"处理——vision_ocr._clean_items() 会兜底填
+     * 一个能被识别成匿名观众的占位符(2026-09-28 改的;之前客户端固定写死"直播间观众",这个词不在
+     * 匿名名单里,会被当成一个真实昵称,导致每句回答都以同一句"直播间观众老板,"开头)。
      */
     fun visionText(lines: List<String>): JSONObject {
         val items = JSONArray()
-        for (line in lines) items.put(JSONObject().put("nickname", "直播间观众").put("content", line))
+        for (line in lines) items.put(JSONObject().put("content", line))
         return call(req("/api/vision/text", JSONObject().put("items", items)))
     }
 }
