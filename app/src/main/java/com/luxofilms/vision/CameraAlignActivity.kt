@@ -236,8 +236,9 @@ class CameraAlignActivity : AppCompatActivity() {
         // unbindAll() 拆掉了——不管本次有没有走到 finishCalibration(),都得让服务尝试拿回摄像头,
         // 不然它只是悄悄停在那,通知却还写着"正在采集"(2026-09-28 修的硬伤)。finishCalibration()
         // 里已经调用过一次的话,这里再调用是幂等的(重新读一遍标定、重新绑定一次),无害。
-        if (!finishedNormally && CalibrationStore.load() != null) {
-            CaptureService.start(this)
+        // resume 不改变店员的意图:本来就是主动停掉采集、只是进来看看标定的,退出时不能偷偷把摄像头又打开
+        if (!finishedNormally && CalibrationStore.load() != null && Prefs.captureWanted) {
+            CaptureService.resume(this)
         }
         cameraProvider?.unbindAll()
         ui.removeCallbacksAndMessages(null)

@@ -58,5 +58,17 @@ object Prefs {
         get() = sp.getFloat("sample_fps", 0.5f)
         set(v) = sp.edit().putFloat("sample_fps", v).apply()
 
+    /** 店员是不是想让它一直采集。点"开始采集"/标定完成 = true,点"停止采集" = false。
+     * 开机自启和标定页退出时的自动拉起都要看它 —— 店员主动停掉的,重启后不能又自己把摄像头打开。
+     * 默认 true:升级前已经在采集的手机,重启后照常恢复。 */
+    var captureWanted: Boolean
+        get() = sp.getBoolean("capture_wanted", true)
+        set(v) = sp.edit().putBoolean("capture_wanted", v).apply()
+
+    /** 电池优化白名单的引导弹窗只问一次,不反复打扰 */
+    var batteryAsked: Boolean
+        get() = sp.getBoolean("battery_asked", false)
+        set(v) = sp.edit().putBoolean("battery_asked", v).apply()
+
     fun clear() = sp.edit().clear().apply()
 }

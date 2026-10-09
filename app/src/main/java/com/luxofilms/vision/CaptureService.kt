@@ -5,10 +5,13 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Handler
+import android.os.Looper
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import java.util.concurrent.Executors
@@ -26,13 +29,27 @@ class CaptureService : LifecycleService() {
     private val rateLimitedUntil = AtomicLong(0L)   // 服务端返回 429 后,在这个时刻之前不再尝试上传
     private var cameraProvider: ProcessCameraProvider? = null
     @Volatile private var calibration: Calibration? = null
+    @Volatile private var fps = 0.5f                    // 缓存采样频率:Prefs 是加密存储,每帧读一次要解密一次
+    private val main = Handler(Looper.getMainLooper())
+    private var foregroundOk = false
+    private var stalledRounds = 0                       // 看门狗连续发现"没有画面"的轮数
+    private var stallAlerted = false
 
     override fun onCreate() {
         super.onCreate()
-        val notification = buildNotification("正在采集弹幕…")
-        ServiceCompat.startForeground(
-            this, NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
-        )
+        try {
+            ServiceCompat.startForeground(
+                this, NOTIF_ID, buildNotification("正在采集弹幕…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
+            )
+            foregroundOk = true
+            running = true
+        } catch (e: Exception) {
+            // 后台启动(开机自启)的前台服务,安卓 14 起不允许是 camera 类型,会抛 SecurityException:
+            // 以前这里没接住,整个 APP 直接崩;现在留一条可见告警,让店员点进来手动开始(前台启动一定行)
+            Alerts.bootResumeFailed(this, e.javaClass.simpleName)
+            stopSelf()
+            return
+        }
         // 真正的"加载标定+绑定摄像头"统一放到 onStartCommand() 里做(见 refreshAndBind()),
         // 不在 onCreate 单独写一份——否则"服务已经在跑,只是想让它重新读一次标定/重新抓一次摄像头"这个
         // 场景没有入口:startForegroundService() 对已存在的服务只会触发 onStartCommand,不会重新走 onCreate。
@@ -40,6 +57,7 @@ class CaptureService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        if (!foregroundOk) return START_NOT_STICKY
         refreshAndBind()
         return START_STICKY
     }
@@ -60,13 +78,53 @@ class CaptureService : LifecycleService() {
             stopSelf()
             return
         }
+        fps = Prefs.sampleFps.coerceIn(0.2f, 5f)
+        lastFrameAt = System.currentTimeMillis()
+        stalledRounds = 0
+        stallAlerted = false
         startCamera()
+        main.removeCallbacks(watchdog)
+        main.postDelayed(watchdog, WATCHDOG_MS)
+    }
+
+    /** 看门狗:摄像头被别的应用占用、被系统回收、开机后台启动拿不到相机……这些情况下 CameraX 不一定报错,
+     * 只是不再出帧,而通知栏仍写着"正在采集"。以前完全没人发现。这里每 15 秒看一次最近一帧的时间:
+     * 超过 45 秒没帧就重新绑定摄像头,连续 3 轮(约 1 分钟)还不行就发告警让店员处理。 */
+    private val watchdog = object : Runnable {
+        override fun run() {
+            fps = Prefs.sampleFps.coerceIn(0.2f, 5f)
+            val silentMs = System.currentTimeMillis() - lastFrameAt
+            if (silentMs > STALL_MS) {
+                stalledRounds++
+                setStatus("⚠ 摄像头 ${silentMs / 1000} 秒没有画面,正在重试")
+                if (stalledRounds >= 3 && !stallAlerted) {
+                    stallAlerted = true
+                    Alerts.cameraStalled(this@CaptureService, "摄像头连续约一分钟没有画面,可能被别的应用占用或被系统限制。点这里打开 APP,重新点“开始采集”。")
+                }
+                startCamera()
+            } else if (stalledRounds > 0) {
+                stalledRounds = 0
+                stallAlerted = false
+                setStatus("正在采集弹幕…")
+                Alerts.clearCamera(this@CaptureService)
+            }
+            main.postDelayed(this, WATCHDOG_MS)
+        }
+    }
+
+    private fun setStatus(text: String) {
+        runCatching { NotificationManagerCompat.from(this).notify(NOTIF_ID, buildNotification(text)) }
     }
 
     private fun startCamera() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
-            val provider = providerFuture.get()
+            val provider = try {
+                providerFuture.get()
+            } catch (e: Exception) {
+                setStatus("⚠ 摄像头启动失败,正在重试")   // 不 stopSelf:看门狗会继续重试并在持续失败时告警
+                return@addListener
+            }
             cameraProvider = provider
 
             // 跟标定引导页用同一套分辨率策略(CameraTuning)——分辨率一致,比例坐标才对得上同一个地方;
@@ -78,9 +136,9 @@ class CaptureService : LifecycleService() {
                 .build()
             analysis.setAnalyzer(io) { proxy ->
                 val cal = calibration
-                if (cal == null) { proxy.close(); return@setAnalyzer }
                 val now = System.currentTimeMillis()
-                val fps = Prefs.sampleFps.coerceIn(0.2f, 5f)
+                lastFrameAt = now                       // 不管后面是否丢帧,"摄像头在出帧"本身就是看门狗要的信号
+                if (cal == null) { proxy.close(); return@setAnalyzer }
                 val minIntervalMs = (1000f / fps).toLong()
                 val last = lastProcessedAt.get()
                 if (now < rateLimitedUntil.get() || now - last < minIntervalMs) {
@@ -105,7 +163,7 @@ class CaptureService : LifecycleService() {
                 provider.unbindAll()
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
             } catch (e: Exception) {
-                stopSelf()
+                setStatus("⚠ 摄像头启动失败,正在重试")   // 同上:交给看门狗重试,而不是悄悄 stopSelf 后通知栏还留着旧状态
             }
         }, androidx.core.content.ContextCompat.getMainExecutor(this))
     }
@@ -126,6 +184,9 @@ class CaptureService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        main.removeCallbacks(watchdog)
+        running = false
+        Alerts.clearCamera(this)
         cameraProvider?.unbindAll()
         io.shutdownNow()
         super.onDestroy()
@@ -134,14 +195,32 @@ class CaptureService : LifecycleService() {
     companion object {
         private const val NOTIF_ID = 2001
         private const val RATE_LIMIT_COOLDOWN_MS = 65_000L   // 服务端限流窗口是 60 秒滑动窗口,多留 5 秒余量
+        private const val WATCHDOG_MS = 15_000L
+        private const val STALL_MS = 45_000L
 
+        /** 服务是否在跑(首页据此显示状态,不再用 Activity 里一个会随重建丢失的本地变量) */
+        @Volatile var running = false
+            private set
+        /** 摄像头最近一次出帧的时刻(毫秒);首页用来提示"N 秒没有画面" */
+        @Volatile var lastFrameAt = 0L
+            private set
+
+        /** 店员的明确意图:开始采集(含标定完成)。记下"想要采集",重启后才会自动恢复。 */
         fun start(context: Context) {
-            val intent = Intent(context, CaptureService::class.java)
-            context.startForegroundService(intent)
+            Prefs.captureWanted = true
+            launch(context)
         }
 
+        /** 自动恢复(开机、标定页退出):不改变店员的意图 —— 主动停掉的,不会被这里偷偷再打开 */
+        fun resume(context: Context) = launch(context)
+
         fun stop(context: Context) {
+            Prefs.captureWanted = false
             context.stopService(Intent(context, CaptureService::class.java))
+        }
+
+        private fun launch(context: Context) {
+            context.startForegroundService(Intent(context, CaptureService::class.java))
         }
     }
 }
