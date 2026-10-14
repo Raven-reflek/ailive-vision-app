@@ -13,9 +13,9 @@
 ## 构建
 
 ```bat
-:: 工程根目录先建 local.properties(已被 git 忽略),写:  sdk.dir=C\:\Users\<你>\AppData\Local\Android\Sdk
-gradlew.bat assembleDebug          :: app\build\outputs\apk\debug\app-debug.apk
-gradlew.bat assembleRelease        :: app\build\outputs\apk\release\app-release.apk
+:: 工程根目录先建 local.properties(已被 git 忽略),写(用正斜杠): sdk.dir=C:/Users/<你>/AppData/Local/Android/Sdk
+.\gradlew.bat assembleDebug          :: app\build\outputs\apk\debug\app-debug.apk
+.\gradlew.bat assembleRelease       :: app\build\outputs\apk\release\app-release.apk
 ```
 
 每次发版同时改 `app/build.gradle.kts` 里的 `versionCode`(+1)和 `versionName`。发布走应用内更新通道:APK 命名 `vision-<版本>.apk`,
