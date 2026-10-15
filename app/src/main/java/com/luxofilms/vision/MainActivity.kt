@@ -64,6 +64,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, CameraAlignActivity::class.java))
         }
         b.btnCheckUpdate.setOnClickListener { UpdateChecker.check(this, silent = false) }
+        b.btnPreview.setOnClickListener {
+            // 预览要看采集中的画面;没标定过就先去标定(和"开始采集"一致)
+            startActivity(Intent(this, if (Prefs.calibrated) PreviewActivity::class.java else CameraAlignActivity::class.java))
+        }
         // "最近识别到的弹幕":固定高度、区域内滚动,可展开 / 收起;点标题行或右侧文字切换
         applyRecognizedExpanded(Prefs.recognizedExpanded)
         val toggleRecognized = View.OnClickListener {

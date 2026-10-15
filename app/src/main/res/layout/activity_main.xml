@@ -171,6 +171,14 @@
             android:text="开始采集" />
 
         <Button
+            android:id="@+id/btnPreview"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="采集预览" />
+
+        <Button
             android:id="@+id/btnCheckUpdate"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="match_parent"
