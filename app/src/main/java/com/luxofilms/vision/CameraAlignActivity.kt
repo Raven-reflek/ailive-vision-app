@@ -1,6 +1,7 @@
 package com.luxofilms.vision
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.PointF
@@ -58,6 +59,12 @@ class CameraAlignActivity : AppCompatActivity() {
         setContentView(b.root)
         b.overlay.mode = AlignOverlayView.Mode.QUAD
 
+        // 返回首页。显式回到 MainActivity(singleTask):首次绑定后是 Bind → 标定,回退栈里没有首页,
+        // 光 finish() 会直接退出 APP。没走完标定就离开,onDestroy 会把采集接回去(见下)
+        b.btnBack.setOnClickListener {
+            startActivity(Intent(this, MainActivity::class.java))
+            finish()
+        }
         b.btnNext.setOnClickListener { onNextClicked() }
         b.btnRetake.setOnClickListener { retakeReference() }
 
