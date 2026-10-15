@@ -32,6 +32,9 @@ object FrameProcessor {
 
     private val recognizer by lazy { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
 
+    /** 最近上传过的弹幕(模糊判重)。只在 CaptureService 的单线程 Analyzer 里用;进程内常驻,窗口过期后自然清空。 */
+    private val deduper = DanmakuDeduper()
+
     /** 处理一帧并上传;成功/失败都不抛到调用方之外炸掉采集循环,内部吞掉异常只记日志。
      * 返回值区分"服务端限流"和"其它失败",调用方(CaptureService)据此决定要不要退避——
      * 以前不管什么原因失败都只是静默丢弃、下一帧照样按原节奏再打一次,遇到限流等于白打
@@ -40,24 +43,31 @@ object FrameProcessor {
      * 识别出的内容(不管上传成不成功)都记进 RecognizedLog,首页拿它实时展示"摄像头认出了什么"——
      * 装机/调试时用肉眼比对实际弹幕,比连电脑翻日志方便太多(2026-09-28 加)。 */
     fun process(proxy: ImageProxy, calibration: Calibration, publishPreview: Boolean = false): Result {
-        val lines: List<String> = try {
+        val items: List<LineMerger.Item> = try {
             val f = prepare(proxy, calibration)
             // 预览页打开时顺手发布一份(缩小的拷贝,不影响下面送去识别的原图);发布失败不能影响识别
             if (publishPreview) publishPreview(f.upright, if (PreviewBus.cropWanted) f.enhanced else null, calibration)
-            recognizeLocally(f.enhanced)
+            // 视觉行 → 弹幕条:折成两行的弹幕合回一条,不再各问一次(2026-10-15 修)
+            LineMerger.merge(recognizeLocally(f.enhanced), f.enhanced.height)
         } catch (e: Exception) {
             Log.w(TAG, "这一帧处理/识别失败,丢弃:${e.message}")
             return Result.ERROR
         }
-        if (PreviewBus.active) PreviewBus.noteLines(lines, System.currentTimeMillis())
-        if (lines.isEmpty()) return Result.OK   // 这一帧弹幕区域没识别到文字,不算失败,也没什么好上传的
+        val now = System.currentTimeMillis()
+        if (PreviewBus.active) PreviewBus.noteLines(items.map { it.text }, now)
+        if (items.isEmpty()) return Result.OK   // 这一帧弹幕区域没识别到文字,不算失败,也没什么好上传的
+        // 同一条弹幕会在画面上停留很多帧、每帧的 OCR 错字还不一样:只上传没见过的,识别日志也只记这些
+        val fresh = deduper.select(items, now)
+        if (fresh.isEmpty()) return Result.OK
+        val texts = fresh.map { it.text }
         return try {
-            Api.visionText(lines)
-            RecognizedLog.add(lines, uploaded = true)
+            Api.visionText(fresh.map { it.content })   // 只传内容,"昵称:" 前缀去掉(昵称 OCR 不可靠,服务端也是固定占位昵称)
+            deduper.commit(fresh, now)
+            RecognizedLog.add(texts, uploaded = true)
             Result.OK
         } catch (e: Api.ApiError) {
             Log.w(TAG, "上传失败 HTTP ${e.code}:${e.message}")
-            RecognizedLog.add(lines, uploaded = false)
+            RecognizedLog.add(texts, uploaded = false)
             when {
                 e.code == 429 -> Result.RATE_LIMITED
                 BindingGuard.classify(e) == BindingGuard.Verdict.TOKEN_INVALID -> Result.NEED_REBIND
@@ -65,7 +75,7 @@ object FrameProcessor {
             }
         } catch (e: Exception) {
             Log.w(TAG, "上传失败:${e.message}")
-            RecognizedLog.add(lines, uploaded = false)
+            RecognizedLog.add(texts, uploaded = false)
             Result.ERROR
         }
     }
@@ -174,11 +184,21 @@ object FrameProcessor {
         canvas.drawText(label, tx, ty, tag)
     }
 
-    /** ML Kit按"视觉上聚在一起的文字块"分组文字,弹幕通常一行一条,用 Line 粒度比 Block 更贴近实际。 */
-    private fun recognizeLocally(bmp: Bitmap): List<String> {
+    /**
+     * 返回带位置的视觉行(Line 粒度)。Line 是视觉行:一条弹幕折成两行就是两个 Line,
+     * 所以后面要用位置和文字特征把它们合回一条(LineMerger)。
+     */
+    private fun recognizeLocally(bmp: Bitmap): List<OcrLine> {
         val image = InputImage.fromBitmap(bmp, 0)
         val result = Tasks.await(recognizer.process(image), 8, TimeUnit.SECONDS)
-        return result.textBlocks.flatMap { it.lines }.map { it.text.trim() }.filter { it.isNotEmpty() }
+        var fallbackTop = 0
+        return result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
+            val text = line.text.trim()
+            if (text.isEmpty()) return@mapNotNull null
+            val b = line.boundingBox
+            if (b != null) OcrLine(text, b.left, b.top, b.right, b.bottom)
+            else { fallbackTop += 1000; OcrLine(text, 0, fallbackTop, 10, fallbackTop + 10) }   // 没有位置(理论上不会):互相隔开,不合并
+        }
     }
 
     /**
