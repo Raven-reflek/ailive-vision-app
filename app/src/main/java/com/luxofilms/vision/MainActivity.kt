@@ -33,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private var lastTokenCheckAt = 0L          // 上次令牌探测的时刻,配合 BindingGuard.shouldCheck 限频
     private var redirectedToBind = false       // 已经因为"不再是绑定状态"跳去绑定页,别重复跳
+    private var renderedRecognizedVersion = -1 // 上次画"最近识别到的弹幕"时 RecognizedLog 的版本;没变就不重建
     // 采集状态以服务自己为准(CaptureService.running),不在 Activity 里存一份:开机自启、Activity 重建、
     // 标定完成后服务都在跑,本地变量却是 false,界面就会错误地显示"已停止"
     private val capturing: Boolean get() = CaptureService.running
@@ -63,6 +64,19 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, CameraAlignActivity::class.java))
         }
         b.btnCheckUpdate.setOnClickListener { UpdateChecker.check(this, silent = false) }
+        // "最近识别到的弹幕":固定高度、区域内滚动,可展开 / 收起;点标题行或右侧文字切换
+        applyRecognizedExpanded(Prefs.recognizedExpanded)
+        val toggleRecognized = View.OnClickListener {
+            val expanded = !Prefs.recognizedExpanded
+            Prefs.recognizedExpanded = expanded
+            applyRecognizedExpanded(expanded)
+        }
+        b.btnToggleRecognized.setOnClickListener(toggleRecognized)
+        b.recognizedTitleArea.setOnClickListener(toggleRecognized)
+        b.btnClearRecognized.setOnClickListener {
+            RecognizedLog.clear()
+            renderRecognized()
+        }
         b.btnUnbind.setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("解除绑定?")
@@ -202,9 +216,33 @@ class MainActivity : AppCompatActivity() {
     /** 把最近识别到的几条弹幕画出来:装机/调试时肉眼核对"摄像头认出了什么",
      * 比对着实际弹幕能直接判断标定框有没有歪、识别准不准。 */
     private fun renderRecognized() {
+        // 内容没变就不重建:render() 每 3 秒跑一次,每次都清空重画会把店员正在翻看的滚动位置重置回顶部
+        val version = RecognizedLog.version()
+        if (version == renderedRecognizedVersion) return
+        renderedRecognizedVersion = version
+
+        // 重建前记住"店员正在看的那一条"(第一条还没滚出视口的)和它相对视口顶部的偏移。
+        // 新条目插在最上面时,如果只恢复数值相同的 scrollY,内容会被顶下去、正在看的那条跳走;
+        // 按条目 id 重新定位,就能让它留在原地。本来就在最顶上(scrollY==0)的不锚定,继续跟着看最新。
+        val oldScrollY = b.recognizedScroll.scrollY
+        var anchorId = -1L
+        var anchorOffset = 0
+        if (oldScrollY > 0) {
+            for (i in 0 until b.recognizedList.childCount - 1 step 2) {
+                val head = b.recognizedList.getChildAt(i)
+                val body = b.recognizedList.getChildAt(i + 1)
+                if (body.bottom > oldScrollY) {
+                    anchorId = (head.tag as? Long) ?: -1L
+                    anchorOffset = oldScrollY - head.top
+                    break
+                }
+            }
+        }
+
         val list = RecognizedLog.recent()
         b.recognizedList.removeAllViews()
         b.recognizedEmpty.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
+        b.btnClearRecognized.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
         val fmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         val dp10 = (10 * resources.displayMetrics.density).toInt()
         for (e in list) {
@@ -216,6 +254,7 @@ class MainActivity : AppCompatActivity() {
                 statusStart, head.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
             val headView = TextView(this).apply {
+                tag = e.id
                 text = head; textSize = 12f
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.muted))
             }
@@ -228,5 +267,37 @@ class MainActivity : AppCompatActivity() {
             b.recognizedList.addView(headView)
             b.recognizedList.addView(bodyView)
         }
+        // 重建后等布局完成再恢复位置:锚定的那一条还在就让它回到原来的偏移;
+        // 已经被挤出 20 条上限(或清空了)就退回原来的数值位置,系统会自动夹到合法范围
+        b.recognizedScroll.post {
+            if (oldScrollY <= 0) { b.recognizedScroll.scrollTo(0, 0); return@post }
+            var target = oldScrollY
+            for (i in 0 until b.recognizedList.childCount step 2) {
+                val head = b.recognizedList.getChildAt(i)
+                if (head.tag == anchorId) { target = head.top + anchorOffset; break }
+            }
+            b.recognizedScroll.scrollTo(0, target)
+        }
+    }
+
+    /**
+     * 展开 / 收起"最近识别到的弹幕"区域:改的是固定高度,区域内部始终可滚动,
+     * 所以不管条目有多少,卡片高度恒定、下面的"重新标定"等按钮不会被挤到很远。
+     * 收起 150dp(约 2~3 条),展开 400dp,且最多不超过屏幕高度的一半(小屏手机不至于顶掉按钮)。
+     */
+    private fun applyRecognizedExpanded(expanded: Boolean) {
+        val density = resources.displayMetrics.density
+        val collapsedPx = (RECOGNIZED_COLLAPSED_DP * density).toInt()
+        val expandedPx = minOf((RECOGNIZED_EXPANDED_DP * density).toInt(), resources.displayMetrics.heightPixels / 2)
+        b.recognizedScroll.layoutParams = b.recognizedScroll.layoutParams.apply {
+            height = if (expanded) maxOf(expandedPx, collapsedPx) else collapsedPx
+        }
+        b.btnToggleRecognized.text = if (expanded) "收起 ▴" else "展开 ▾"
+        b.btnToggleRecognized.contentDescription = if (expanded) "收起最近识别到的弹幕区域" else "展开最近识别到的弹幕区域"
+    }
+
+    private companion object {
+        const val RECOGNIZED_COLLAPSED_DP = 150
+        const val RECOGNIZED_EXPANDED_DP = 400
     }
 }

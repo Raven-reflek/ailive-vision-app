@@ -68,6 +68,11 @@ object Prefs {
         get() = sp.getBoolean("capture_wanted", true)
         set(v) = sp.edit().putBoolean("capture_wanted", v).apply()
 
+    /** 首页"最近识别到的弹幕"区域是否展开(默认收起)。只是界面偏好,令牌失效/解除绑定时不动它。 */
+    var recognizedExpanded: Boolean
+        get() = sp.getBoolean("recognized_expanded", false)
+        set(v) = sp.edit().putBoolean("recognized_expanded", v).apply()
+
     /** 电池优化白名单的引导弹窗只问一次,不反复打扰 */
     var batteryAsked: Boolean
         get() = sp.getBoolean("battery_asked", false)

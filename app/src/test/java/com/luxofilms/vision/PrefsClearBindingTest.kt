@@ -8,7 +8,7 @@ import org.junit.Before
 import org.junit.Test
 
 /** 内存版 SharedPreferences:不依赖 Robolectric,够 Prefs 的读写用。 */
-private class FakePrefs : SharedPreferences {
+internal class FakePrefs : SharedPreferences {
     val map = HashMap<String, Any?>()
     override fun getAll(): MutableMap<String, *> = map
     override fun getString(k: String, d: String?) = map[k] as? String ?: d
@@ -104,6 +104,14 @@ class PrefsClearBindingTest {
         assertTrue(Prefs.bound)
         assertTrue(Prefs.calibrated)
         assertEquals("", Prefs.bindNotice)
+    }
+
+    @Test fun recognizedExpanded_defaultsCollapsed_andSurvivesClearBinding() {
+        assertFalse("默认收起", Prefs.recognizedExpanded)
+        Prefs.recognizedExpanded = true
+        assertTrue(Prefs.recognizedExpanded)
+        Prefs.clearBinding("x")
+        assertTrue("界面偏好不随解绑清掉", Prefs.recognizedExpanded)
     }
 
     @Test fun fullClear_stillWipesEverything_forReference() {
