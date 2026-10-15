@@ -23,12 +23,16 @@ import com.luxofilms.vision.databinding.ActivityMainBinding
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 /** 首页:绑定/标定/采集状态一览,不需要一直盯着看(采集是后台服务),主要给店员排查问题用。 */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var b: ActivityMainBinding
     private val ui = Handler(Looper.getMainLooper())
+    private val io = Executors.newSingleThreadExecutor()
+    private var lastTokenCheckAt = 0L          // 上次令牌探测的时刻,配合 BindingGuard.shouldCheck 限频
+    private var redirectedToBind = false       // 已经因为"不再是绑定状态"跳去绑定页,别重复跳
     // 采集状态以服务自己为准(CaptureService.running),不在 Activity 里存一份:开机自启、Activity 重建、
     // 标定完成后服务都在跑,本地变量却是 false,界面就会错误地显示"已停止"
     private val capturing: Boolean get() = CaptureService.running
@@ -59,6 +63,17 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, CameraAlignActivity::class.java))
         }
         b.btnCheckUpdate.setOnClickListener { UpdateChecker.check(this, silent = false) }
+        b.btnUnbind.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("解除绑定?")
+                .setMessage("将停止采集并清除本机的登录信息,需要重新扫码绑定才能继续。标定数据会保留,不用重新标定。")
+                .setPositiveButton("解除绑定") { _, _ ->
+                    BindingGuard.clearBindingAndStop(this, BindingGuard.NOTICE_UNBOUND, alert = false)
+                    render()          // 已不是绑定状态 → render() 会跳去绑定页
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
         askNotificationPermission()
         b.btnToggleCapture.setOnClickListener {
             if (!Prefs.calibrated) {
@@ -81,6 +96,42 @@ class MainActivity : AppCompatActivity() {
         // (UpdateChecker.handledCode),不会来回打扰。以前压根没有这个检查,装上就是那个版本。
         UpdateChecker.check(this, silent = true)
         maybeAskBatteryWhitelist()
+        checkToken()
+    }
+
+    /**
+     * 回到前台时探测一次令牌是否还有效(限频,见 BindingGuard.shouldCheck)。
+     * 上传路径只有"弹幕区域里真的识别出文字"才会触发,采集空闲时撤销了设备是发现不了的;这里补上这个入口。
+     * 只有服务端明确回 401/410 + need_bind 才解绑;网络错误、超时、5xx 都当作"这次没探测成",
+     * 不动绑定(店员手机一时没信号不该被清掉绑定),下次回前台再试。
+     */
+    private fun checkToken() {
+        if (!Prefs.bound) return
+        val now = System.currentTimeMillis()
+        if (!BindingGuard.shouldCheck(now, lastTokenCheckAt)) return
+        lastTokenCheckAt = now
+        io.execute {
+            try {
+                Api.me()
+                ui.post { showStoreWarn(null) }
+            } catch (e: Api.ApiError) {
+                when (BindingGuard.classify(e)) {
+                    BindingGuard.Verdict.TOKEN_INVALID -> ui.post {
+                        BindingGuard.clearBindingAndStop(this, BindingGuard.NOTICE_INVALID, alert = true)
+                        render()
+                    }
+                    BindingGuard.Verdict.STORE_DISABLED -> ui.post { showStoreWarn(BindingGuard.WARN_STORE_DISABLED) }
+                    BindingGuard.Verdict.OTHER -> lastTokenCheckAt = 0L      // 没探测成,下次回前台可以再试
+                }
+            } catch (e: Exception) {
+                lastTokenCheckAt = 0L                                        // 网络问题:同上,不动绑定
+            }
+        }
+    }
+
+    private fun showStoreWarn(text: String?) {
+        b.statusWarn.text = text ?: ""
+        b.statusWarn.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
     }
 
     private fun askNotificationPermission() {
@@ -112,7 +163,21 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    override fun onDestroy() {
+        io.shutdownNow()
+        super.onDestroy()
+    }
+
     private fun render() {
+        if (!Prefs.bound) {
+            // 绑定已被清掉(令牌失效 / 店员解除绑定,可能发生在采集服务里,首页每 3 秒会走到这里):回绑定页
+            if (!redirectedToBind) {
+                redirectedToBind = true
+                startActivity(Intent(this, BindActivity::class.java))
+                finish()
+            }
+            return
+        }
         b.storeInfo.text = "门店:${Prefs.storeName.ifEmpty { Prefs.storeId }} · ${Prefs.server}"
 
         val cal = CalibrationStore.load()

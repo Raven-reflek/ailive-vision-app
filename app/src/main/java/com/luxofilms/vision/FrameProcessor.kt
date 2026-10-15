@@ -24,7 +24,8 @@ import java.util.concurrent.TimeUnit
 object FrameProcessor {
     private const val TAG = "FrameProcessor"
 
-    enum class Result { OK, RATE_LIMITED, ERROR }
+    /** NEED_REBIND:服务端明确说这台设备的令牌已作废(401/410 + need_bind),调用方要停采集并提示重新扫码。 */
+    enum class Result { OK, RATE_LIMITED, ERROR, NEED_REBIND }
 
     private val recognizer by lazy { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
 
@@ -57,7 +58,11 @@ object FrameProcessor {
         } catch (e: Api.ApiError) {
             Log.w(TAG, "上传失败 HTTP ${e.code}:${e.message}")
             RecognizedLog.add(lines, uploaded = false)
-            if (e.code == 429) Result.RATE_LIMITED else Result.ERROR
+            when {
+                e.code == 429 -> Result.RATE_LIMITED
+                BindingGuard.classify(e) == BindingGuard.Verdict.TOKEN_INVALID -> Result.NEED_REBIND
+                else -> Result.ERROR
+            }
         } catch (e: Exception) {
             Log.w(TAG, "上传失败:${e.message}")
             RecognizedLog.add(lines, uploaded = false)

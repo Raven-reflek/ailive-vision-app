@@ -50,6 +50,8 @@ class BindActivity : AppCompatActivity() {
             bind(b.inServer.text.toString().trim(), b.inStore.text.toString().trim(), b.inCode.text.toString().trim())
         }
         if (BuildConfig.DEFAULT_SERVER.isNotEmpty()) b.inServer.setText(BuildConfig.DEFAULT_SERVER)
+        // 因为令牌失效 / 解除绑定回到这里时,说明原因(绑定成功后会清掉)
+        if (Prefs.bindNotice.isNotEmpty()) b.msg.text = Prefs.bindNotice
     }
 
     private fun decodeQrFromImage(uri: Uri) {
@@ -103,6 +105,7 @@ class BindActivity : AppCompatActivity() {
                 Prefs.storeId = r.optString("store", store)
                 Prefs.storeName = r.optString("store_name", "")
                 Prefs.token = token
+                Prefs.bindNotice = ""
                 ui.post {
                     // 绑定完必须先标定(不知道拍哪块区域没法采集),没标定过就直接进标定流程
                     val next = if (Prefs.calibrated) MainActivity::class.java else CameraAlignActivity::class.java

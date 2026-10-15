@@ -28,6 +28,21 @@
 3. 点「开始采集」:前台服务按设定帧率取帧 → 透视纠正与裁剪 → 本地 OCR → 上传文字。首页会显示最近识别到的几行,用于核对识别效果。
 4. 服务有看门狗:摄像头长时间没有画面会自动重连并发告警;手机重启后会尝试自动恢复(后台启动相机在新版安卓上可能被系统限制,失败会发通知提示手动开始)。
 
+## 绑定失效与解除绑定
+
+- 总部在管理台**撤销设备 / "换新手机"**后,这台设备的令牌作废。APP 会在两处发现:上传弹幕时服务端返回 401/410 + `need_bind`,
+  以及首页每次回到前台时探测一次(`GET /api/me`,60 秒限频)。发现后**清除服务器/门店/令牌、停止采集、发通知、跳回绑定页并说明原因,标定数据保留**,
+  重新扫码绑定后点"开始采集"即可,不用重新标定。
+- 只有服务端明确返回 `need_bind` 才会解绑;网络错误、超时、5xx、限流都不会。**门店被停用(403)只提示、不解绑。**
+- 首页底部有"解除绑定"按钮(只清本机,标定保留)。
+- 服务端配合事项(设备类型区分、探测/解绑接口等)见 [`docs/服务端对接事项.md`](docs/服务端对接事项.md)。
+
+## 单元测试
+
+```bat
+.\gradlew.bat testDebugUnitTest      :: 令牌失效判定、保留标定的解绑(app\build\reports\tests\testDebugUnitTest\index.html)
+```
+
 ## 主要文件(`app/src/main/java/com/luxofilms/vision/`)
 
 | 文件 | 职责 |
@@ -37,6 +52,7 @@
 | `CameraAlignActivity.kt` / `AlignOverlayView.kt` | 两步标定界面 |
 | `CalibrationStore.kt` / `PerspectiveUtils.kt` | 标定数据与透视变换 |
 | `Api.kt` / `Prefs.kt` | 云服务接口与加密存储 |
+| `BindingGuard.kt` | 令牌失效判定(401/410+need_bind 才算)与失效后的统一善后(清绑定保留标定、停服务、告警) |
 | `Alerts.kt` / `BootReceiver.kt` | 告警通知与开机自启 |
 | `UpdateChecker.kt` | 应用内更新 |
 
