@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_page"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- 顶部:返回图标 + 标题 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/btnBack"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="-12dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="返回首页"
+                android:src="@drawable/ic_arrow_back" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="采集预览"
+                android:textColor="@color/ink"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="只读预览:看摄像头拍到了什么、屏幕和弹幕区框得准不准。画面只在本机显示,不保存、不上传,本页禁止截屏。"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/previewStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
+        <!-- 采集没在运行时显示:预览页不自己开摄像头(会和采集服务抢),只能看采集中的画面 -->
+        <LinearLayout
+            android:id="@+id/previewEmpty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card_white"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/previewEmptyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/ink"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/btnPreviewStart"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="开始采集" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/previewContent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- 主图:摄像头画面 + 屏幕框(橙)+ 弹幕区框(蓝),两个框的颜色和图例与 FrameProcessor.COLOR_* 一致 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card_white"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="■ 屏幕"
+                        android:textColor="#E8620F"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:text="■ 弹幕区(从这里识别文字)"
+                        android:textColor="#1E88E5"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <ImageView
+                    android:id="@+id/imgMain"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:adjustViewBounds="true"
+                    android:contentDescription="摄像头画面,叠加了屏幕框和弹幕区框"
+                    android:scaleType="fitCenter" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="屏幕框四个角上的 1~4 是顺序(1=左上,顺时针),如果顺序反了,摆正后的画面会被翻转。"
+                    android:textColor="@color/faint"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card_white"
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/previewLines"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/ink"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- 识别用的画面:默认收起。展开后采集服务才会额外生成这张图(PreviewBus.cropWanted) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card_white"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="4dp">
+
+                <LinearLayout
+                    android:id="@+id/cropHeader"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="实际送去识别的画面"
+                        android:textColor="@color/ink"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/btnToggleCrop"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/ink"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/cropHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="12dp"
+                    android:textColor="@color/muted"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
+                <ImageView
+                    android:id="@+id/imgCrop"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="12dp"
+                    android:adjustViewBounds="true"
+                    android:contentDescription="弹幕区域裁剪后、送去文字识别的图像"
+                    android:scaleType="fitCenter"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

@@ -24,7 +24,8 @@ import kotlin.math.hypot
  * 画面在 View 里实际占的那个矩形(contentRect)上,而不是整个 View。
  *
  * 两种模式:
- * - QUAD:4个可拖拽角点,连线画出任意四边形(用于"框住整台被摄手机屏幕")
+ * - QUAD:4个可拖拽角点,连线画出任意四边形(用于"框住整台被摄手机屏幕");按住框**内部**可整体平移,
+ *   形状和比例不变(平移的几何计算见 QuadMath,拖到画面边缘时整体一起停住,不会被压变形)
  * - RECT:4个角落手柄,只能拖出轴对齐矩形(用于"框住弹幕区域",已经是摆正后的画面,不需要任意四边形)
  */
 class AlignOverlayView(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
@@ -46,7 +47,8 @@ class AlignOverlayView(context: Context, attrs: AttributeSet? = null) : View(con
     /** 归一化矩形(相对 contentRect),RECT模式用 */
     private var rect = RectF(0.06f, 0.62f, 0.94f, 0.93f)
 
-    private var dragIndex = -1        // QUAD模式:正在拖哪个角点,-1=没有
+    private var dragIndex = -1        // QUAD模式:正在拖哪个角点(0~3),DRAG_ALL=整体平移,-1=没有
+    private var dragStartQuad: List<RatioPoint> = emptyList()   // 整体平移(dragIndex==DRAG_ALL)起点时的四边形
     private var dragCorner = -1       // RECT模式:0=左上 1=右上 2=右下 3=左下 4=整体平移,-1=没有
     private var dragStartRatio = PointF()   // 整体平移(dragCorner==4)起点的内容比例坐标
     private var dragStartRect = RectF()
@@ -133,18 +135,35 @@ class AlignOverlayView(context: Context, attrs: AttributeSet? = null) : View(con
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 when (mode) {
-                    Mode.QUAD -> dragIndex = nearestQuadIndex(touch, cr)
+                    Mode.QUAD -> {
+                        // 角点优先(手柄在框内也被盖住);没命中角点、但手指落在四边形内部 → 整体平移
+                        dragIndex = nearestQuadIndex(touch, cr)
+                        if (dragIndex < 0) {
+                            val inner = RatioPoint((touch.x - cr.left) / cr.width(), (touch.y - cr.top) / cr.height())
+                            if (QuadMath.contains(quad.map { RatioPoint(it.x, it.y) }, inner.x, inner.y)) {
+                                dragIndex = DRAG_ALL
+                                dragStartQuad = quad.map { RatioPoint(it.x, it.y) }
+                                dragStartRatio = toContentRatio(touch, cr)
+                            }
+                        }
+                    }
                     Mode.RECT -> {
                         dragCorner = nearestRectCorner(touch, cr)
                         dragStartRatio = toContentRatio(touch, cr)
                         dragStartRect = RectF(rect)
                     }
                 }
-                return dragIndex >= 0 || dragCorner >= 0
+                return dragIndex != -1 || dragCorner >= 0
             }
             MotionEvent.ACTION_MOVE -> {
                 if (mode == Mode.QUAD && dragIndex >= 0) {
                     quad[dragIndex] = toContentRatio(touch, cr)
+                    invalidate(); return true
+                }
+                if (mode == Mode.QUAD && dragIndex == DRAG_ALL) {
+                    val p = toContentRatio(touch, cr)
+                    val moved = QuadMath.translateClamped(dragStartQuad, p.x - dragStartRatio.x, p.y - dragStartRatio.y)
+                    for (i in quad.indices) quad[i] = PointF(moved[i].x, moved[i].y)
                     invalidate(); return true
                 }
                 if (mode == Mode.RECT && dragCorner >= 0) {
@@ -198,5 +217,9 @@ class AlignOverlayView(context: Context, attrs: AttributeSet? = null) : View(con
                        cr.left + rect.right * cr.width(), cr.top + rect.bottom * cr.height())
         if (r.contains(touch.x, touch.y)) return 4
         return -1
+    }
+
+    private companion object {
+        const val DRAG_ALL = -2     // dragIndex 的特殊值:整体平移四边形
     }
 }

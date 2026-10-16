@@ -14,12 +14,16 @@ import androidx.core.app.NotificationManagerCompat
 object Alerts {
     private const val ID_BOOT = 2101
     private const val ID_CAMERA = 2102
+    private const val ID_BIND = 2103
 
     fun bootResumeFailed(ctx: Context, reason: String?) =
         post(ctx, ID_BOOT, "手机重启后弹幕采集没能自动恢复", "点这里打开 APP,再点“开始采集”。" + (reason?.let { "($it)" } ?: ""))
 
     fun cameraStalled(ctx: Context, detail: String) =
         post(ctx, ID_CAMERA, "弹幕采集:摄像头没有画面", detail)
+
+    fun bindingInvalid(ctx: Context) =
+        post(ctx, ID_BIND, "弹幕采集已停止:绑定已失效", "这台设备被总部撤销或设备已更换。点这里打开 APP 重新扫码绑定(标定数据已保留)。")
 
     fun clearCamera(ctx: Context) = runCatching { NotificationManagerCompat.from(ctx).cancel(ID_CAMERA) }
 

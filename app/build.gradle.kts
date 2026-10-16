@@ -14,8 +14,8 @@ android {
         applicationId = "com.luxofilms.vision"
         minSdk = 26            // 跟门店APP保持一致的机型下限
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.5.1"
+        versionCode = 7
+        versionName = "0.5.2"
         buildConfigField("String", "DEFAULT_SERVER", "\"\"")   // 留空:由扫码二维码给出服务器地址
 
         // ML Kit本地OCR的原生库默认打包x86/x86_64/arm64-v8a/armeabi-v7a四份(单份约11MB),
@@ -77,4 +77,9 @@ dependencies {
     // 本地OCR兜底(2026-09-23):云端Ark视觉大模型账号权限问题没排查出来前,先在设备本地识别文字,
     // 不经过Ark。用独立包(不是 Play服务版)的中文识别模型,离线可用,不依赖首次联网下载模型。
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+
+    // 本地单元测试(./gradlew testDebugUnitTest):令牌失效判定、保留标定的解绑。
+    // org.json:Android 的 android.jar 在单测里是空桩,Api.ApiError 带 JSONObject,要换成真实实现才能构造。
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")
 }

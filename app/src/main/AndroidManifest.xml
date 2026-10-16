@@ -41,6 +41,12 @@
 
         <activity android:name=".BindActivity" android:exported="false" />
 
+        <!-- 采集预览:只读,竖屏(和标定页一致),窗口标志在代码里设置(禁止截屏 + 保持亮屏) -->
+        <activity
+            android:name=".PreviewActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <activity
             android:name=".CameraAlignActivity"
             android:exported="false"

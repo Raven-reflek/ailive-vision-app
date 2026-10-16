@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_page"
@@ -61,7 +62,9 @@
         </LinearLayout>
 
         <!-- 最近识别到的内容:装机/调试时用肉眼核对摄像头认出了什么,不用连电脑翻日志。
-             行数不固定,LinearLayout 由代码动态填充,详见 MainActivity.renderRecognized() -->
+             列表放在固定高度的可滚动区域里(高度由 MainActivity.applyRecognizedHeight() 按收起/展开设置),
+             条目再多,卡片也不会把下面的按钮挤出屏幕。行数不固定,recognizedList 由代码动态填充,
+             详见 MainActivity.renderRecognized() -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -70,37 +73,87 @@
             android:background="@drawable/bg_card_white"
             android:padding="16dp">
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="最近识别到的弹幕"
-                android:textColor="@color/ink"
-                android:textSize="15sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="核对摄像头认出的文字对不对得上实际弹幕,能看出标定框有没有歪"
-                android:textColor="@color/muted"
-                android:textSize="12sp" />
-
             <LinearLayout
-                android:id="@+id/recognizedList"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:orientation="vertical" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/recognizedEmpty"
+                <LinearLayout
+                    android:id="@+id/recognizedTitleArea"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="最近识别到的弹幕"
+                        android:textColor="@color/ink"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="核对摄像头认出的文字对不对得上实际弹幕,能看出标定框有没有歪"
+                        android:textColor="@color/muted"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/btnClearRecognized"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:gravity="center"
+                    android:paddingHorizontal="10dp"
+                    android:text="清空"
+                    android:textColor="@color/muted"
+                    android:textSize="13sp"
+                    android:contentDescription="清空最近识别到的弹幕列表"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/btnToggleRecognized"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:gravity="center"
+                    android:paddingHorizontal="10dp"
+                    android:textColor="@color/ink"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/recognizedScroll"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="还没识别到内容(采集开着的话,等弹幕出现在框里就会显示)"
-                android:textColor="@color/faint"
-                android:textSize="13sp" />
+                android:layout_height="150dp"
+                android:layout_marginTop="6dp"
+                android:fadeScrollbars="false"
+                android:scrollbars="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:id="@+id/recognizedList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+
+                    <TextView
+                        android:id="@+id/recognizedEmpty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="还没识别到内容(采集开着的话,等弹幕出现在框里就会显示)"
+                        android:textColor="@color/faint"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </androidx.core.widget.NestedScrollView>
         </LinearLayout>
 
         <Button
@@ -110,13 +163,32 @@
             android:layout_marginTop="20dp"
             android:text="重新标定" />
 
-        <Button
-            android:id="@+id/btnToggleCapture"
-            style="@style/Widget.Material3.Button.TonalButton"
+        <!-- 开始/停止采集(主操作,浅橙底)和采集预览(辅助操作,描边用 @color/line,与门店 APP 话术页的"批量导入"一致)同一行,各占一半;
+             两个按钮等高(子项 match_parent,由较高的那个撑开),大字体/窄屏下文字允许换行不被截断 -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="开始采集" />
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnToggleCapture"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="开始采集" />
+
+            <Button
+                android:id="@+id/btnPreview"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:text="采集预览"
+                app:strokeColor="@color/line" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/btnCheckUpdate"
@@ -125,6 +197,14 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:text="检查更新" />
+
+        <Button
+            android:id="@+id/btnUnbind"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="解除绑定"
+            android:textColor="@color/bad" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -141,4 +221,4 @@
             android:lineSpacingMultiplier="1.4"
             android:text="1. 把本设备的摄像头固定对准另一台正在直播的手机屏幕\n2. 标定一次弹幕区域后点「开始采集」\n3. 采集期间状态栏会一直显示摄像头使用中的提示,这是正常现象\n4. 如果发现长时间没有新弹幕,可能是设备被移动过,点「重新标定」即可" />
     </LinearLayout>
-</ScrollView>
+</androidx.core.widget.NestedScrollView>

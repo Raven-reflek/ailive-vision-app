@@ -12,7 +12,7 @@
     <string name="bind_do">绑定</string>
 
     <string name="align_step1_title">第一步:对准直播手机屏幕</string>
-    <string name="align_step1_hint">把另一台正在直播的手机完整放入框内,尽量撑满但不要超出画面,拖动四个角对齐屏幕四角</string>
+    <string name="align_step1_hint">把另一台正在直播的手机完整放入框内,尽量撑满但不要超出画面,拖动四个角对齐屏幕四角。按住框内部可整体移动(形状不变)</string>
     <string name="align_step2_title">第二步:框出弹幕区域</string>
     <string name="align_step2_hint">拖动矩形框住弹幕滚动的那一块区域,不要包含主播头像、输入框、购物车图标</string>
     <string name="align_next">下一步</string>

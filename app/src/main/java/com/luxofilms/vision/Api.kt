@@ -52,6 +52,11 @@ object Api {
      * 两边版本号完全独立,不传 app 参数会被当成在查门店APP的版本(见云服务 devices.py 的迁移注释)。 */
     fun version(): JSONObject = call(req("/api/app/version?app=vision"))
 
+    /** 令牌有效性探测:任何带设备鉴权的只读接口都行,这里用 /api/me。
+     * 令牌被撤销 → 401 + need_bind;门店被删 → 410 + need_bind;门店被停用 → 403 + store_disabled。
+     * (服务端没有视觉设备专用的轻量接口,见 docs/服务端对接事项.md) */
+    fun me(): JSONObject = call(req("/api/me"))
+
     /** 扫码绑定:一次性绑定码 → 长效设备 token。二维码内容 {server, store, code} */
     fun bind(server: String, store: String, code: String): JSONObject {
         val body = JSONObject()

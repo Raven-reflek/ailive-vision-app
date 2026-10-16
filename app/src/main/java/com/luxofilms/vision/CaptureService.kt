@@ -26,9 +26,11 @@ class CaptureService : LifecycleService() {
 
     private val io = Executors.newSingleThreadExecutor()
     private val lastProcessedAt = AtomicLong(0L)
+    @Volatile private var lastPreviewAt = 0L        // 上次出预览图的时刻(只在分析器线程读写)
     private val rateLimitedUntil = AtomicLong(0L)   // 服务端返回 429 后,在这个时刻之前不再尝试上传
     private var cameraProvider: ProcessCameraProvider? = null
     @Volatile private var calibration: Calibration? = null
+    @Volatile private var bindingInvalidated = false    // 已发现令牌作废:之后的帧直接丢弃,不再识别/上传
     @Volatile private var fps = 0.5f                    // 缓存采样频率:Prefs 是加密存储,每帧读一次要解密一次
     private val main = Handler(Looper.getMainLooper())
     private var foregroundOk = false
@@ -138,21 +140,44 @@ class CaptureService : LifecycleService() {
                 val cal = calibration
                 val now = System.currentTimeMillis()
                 lastFrameAt = now                       // 不管后面是否丢帧,"摄像头在出帧"本身就是看门狗要的信号
-                if (cal == null) { proxy.close(); return@setAnalyzer }
+                if (cal == null || bindingInvalidated) { proxy.close(); return@setAnalyzer }
                 val minIntervalMs = (1000f / fps).toLong()
-                val last = lastProcessedAt.get()
-                if (now < rateLimitedUntil.get() || now - last < minIntervalMs) {
-                    proxy.close()   // 还没到下一次采样时间,或者刚被服务端限流、还在冷却期:丢帧
+                // 这一帧该做什么由 FrameGate 决定:OCR 的节奏和限流冷却与以前完全一致;
+                // 另外,"采集预览"页打开期间按更高频率出预览图(预览页自己不开摄像头,只读这里发布的图)
+                val decision = FrameGate.decide(
+                    now = now, lastOcrAt = lastProcessedAt.get(), ocrIntervalMs = minIntervalMs,
+                    rateLimitedUntil = rateLimitedUntil.get(),
+                    previewActive = PreviewBus.active, lastPreviewAt = lastPreviewAt,
+                )
+                if (decision.skip) {
+                    proxy.close()   // 还没到下一次采样时间,或者刚被服务端限流、还在冷却期,且没人在看预览:丢帧
                                      // (STRATEGY_KEEP_ONLY_LATEST 保证不会堆积,不是排队重试)
+                    return@setAnalyzer
+                }
+                if (decision.preview) lastPreviewAt = now
+                if (!decision.ocr) {
+                    // 只出预览图,不识别、不上传,也不动 OCR 的计时
+                    try { FrameProcessor.preview(proxy, cal) } finally { proxy.close() }
                     return@setAnalyzer
                 }
                 lastProcessedAt.set(now)
                 try {
-                    if (FrameProcessor.process(proxy, cal) == FrameProcessor.Result.RATE_LIMITED) {
-                        // 服务端 40次/60秒 的窗口按设备算,不是按这一帧算:被拒一次,后面短时间内再试
-                        // 大概率还是被拒,干脆整个冷却窗口内都不再打(2026-09-28 修的硬伤:以前默认
-                        // 采样频率本身就超过服务端限流,约三分之一请求被拒且没有任何退避,白白浪费请求)。
-                        rateLimitedUntil.set(now + RATE_LIMIT_COOLDOWN_MS)
+                    when (FrameProcessor.process(proxy, cal, publishPreview = decision.preview)) {
+                        FrameProcessor.Result.RATE_LIMITED -> {
+                            // 服务端 40次/60秒 的窗口按设备算,不是按这一帧算:被拒一次,后面短时间内再试
+                            // 大概率还是被拒,干脆整个冷却窗口内都不再打(2026-09-28 修的硬伤:以前默认
+                            // 采样频率本身就超过服务端限流,约三分之一请求被拒且没有任何退避,白白浪费请求)。
+                            rateLimitedUntil.set(now + RATE_LIMIT_COOLDOWN_MS)
+                        }
+                        FrameProcessor.Result.NEED_REBIND -> {
+                            // 令牌已被服务端作废:重试没有意义。先置标志挡住后面还在排队的帧,
+                            // 再到主线程清绑定(保留标定)+停服务+发告警(clearBindingAndStop 幂等)。
+                            bindingInvalidated = true
+                            main.post {
+                                BindingGuard.clearBindingAndStop(this@CaptureService, BindingGuard.NOTICE_INVALID, alert = true)
+                            }
+                        }
+                        else -> Unit
                     }
                 } finally {
                     proxy.close()
@@ -187,6 +212,7 @@ class CaptureService : LifecycleService() {
         main.removeCallbacks(watchdog)
         running = false
         Alerts.clearCamera(this)
+        PreviewBus.clear()                  // 采集停了,预览页不该继续显示旧画面
         cameraProvider?.unbindAll()
         io.shutdownNow()
         super.onDestroy()

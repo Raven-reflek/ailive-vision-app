@@ -9,6 +9,9 @@ import androidx.security.crypto.MasterKey
 object Prefs {
     private lateinit var sp: SharedPreferences
 
+    /** 仅供单元测试注入内存实现(真实代码一律走 init(ctx))。 */
+    internal fun initForTest(prefs: SharedPreferences) { sp = prefs }
+
     fun init(ctx: Context) {
         if (::sp.isInitialized) return
         sp = try {
@@ -65,10 +68,35 @@ object Prefs {
         get() = sp.getBoolean("capture_wanted", true)
         set(v) = sp.edit().putBoolean("capture_wanted", v).apply()
 
+    /** 首页"最近识别到的弹幕"区域是否展开(默认收起)。只是界面偏好,令牌失效/解除绑定时不动它。 */
+    var recognizedExpanded: Boolean
+        get() = sp.getBoolean("recognized_expanded", false)
+        set(v) = sp.edit().putBoolean("recognized_expanded", v).apply()
+
     /** 电池优化白名单的引导弹窗只问一次,不反复打扰 */
     var batteryAsked: Boolean
         get() = sp.getBoolean("battery_asked", false)
         set(v) = sp.edit().putBoolean("battery_asked", v).apply()
+
+    /** 绑定失效 / 解除绑定后留给绑定页显示的一句话(为什么回到了绑定页);绑定成功后清空。 */
+    var bindNotice: String
+        get() = sp.getString("bind_notice", "") ?: ""
+        set(v) = sp.edit().putString("bind_notice", v).apply()
+
+    /**
+     * 只清绑定信息(服务器 / 门店 / 令牌),**保留标定**、采样频率等设置。
+     * 令牌失效(被总部撤销、换新手机、门店被删)或店员主动解除绑定时用:标定是对着直播手机摆好摄像头后
+     * 的一次性劳动,与门店和令牌无关,重新扫码绑定后应能直接继续采集,不该让人再标定一遍。
+     * 同时把 captureWanted 置为 false:重新绑定(甚至换了一家店)后不能自己把摄像头打开,
+     * 要店员再点一次"开始采集"。
+     */
+    fun clearBinding(notice: String) {
+        sp.edit()
+            .remove("server").remove("store").remove("store_name").remove("token")
+            .putBoolean("capture_wanted", false)
+            .putString("bind_notice", notice)
+            .apply()
+    }
 
     fun clear() = sp.edit().clear().apply()
 }
