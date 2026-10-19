@@ -84,10 +84,17 @@ class MainActivity : AppCompatActivity() {
         b.btnUnbind.setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("解除绑定?")
-                .setMessage("将停止采集并清除本机的登录信息,需要重新扫码绑定才能继续。标定数据会保留,不用重新标定。")
+                .setMessage("将停止采集、作废这台设备的登录信息,需要重新扫码绑定才能继续。标定数据会保留,不用重新标定。")
                 .setPositiveButton("解除绑定") { _, _ ->
-                    BindingGuard.clearBindingAndStop(this, BindingGuard.NOTICE_UNBOUND, alert = false)
-                    render()          // 已不是绑定状态 → render() 会跳去绑定页
+                    b.btnUnbind.isEnabled = false
+                    // 先尽力通知服务端作废本设备令牌(总部列表里同步变成"已撤销");断网、接口未上线、令牌已作废都照常解除本机
+                    io.execute {
+                        try { Api.unbind() } catch (_: Exception) { }
+                        ui.post {
+                            BindingGuard.clearBindingAndStop(this, BindingGuard.NOTICE_UNBOUND, alert = false)
+                            render()          // 已不是绑定状态 → render() 会跳去绑定页
+                        }
+                    }
                 }
                 .setNegativeButton("取消", null)
                 .show()

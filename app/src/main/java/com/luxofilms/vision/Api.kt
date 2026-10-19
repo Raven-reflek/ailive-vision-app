@@ -23,7 +23,10 @@ object Api {
     /** 上传一帧图片:服务端要调Ark视觉大模型识别,比普通接口慢,读超时放宽 */
     private val slow: OkHttpClient = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
 
-    private val JSON = "application/json; charset=utf-8".toMediaType()
+    /** 解除绑定这类"尽力而为"的请求:整个调用 5 秒内必须结束 */
+    private val quick: OkHttpClient = http.newBuilder().callTimeout(5, TimeUnit.SECONDS).build()
+
+    private val JSON ="application/json; charset=utf-8".toMediaType()
 
     class ApiError(val code: Int, msg: String, val body: JSONObject = JSONObject()) : Exception(msg) {
         val storeDisabled: Boolean get() = body.optBoolean("store_disabled")
@@ -57,11 +60,17 @@ object Api {
      * (服务端没有视觉设备专用的轻量接口,见 docs/服务端对接事项.md) */
     fun me(): JSONObject = call(req("/api/me"))
 
+    /** 自助解除绑定(契约 04):让服务端作废本设备自己的令牌。店员点"解除绑定"时尽力调用一次,
+     * 失败(断网、服务端还没上线这个接口、令牌早已作废)都不影响本机解绑,所以调用方要吞掉异常。
+     * 用短超时:店员点完按钮不该为一个弱网请求等十几秒。 */
+    fun unbind(): JSONObject = call(req("/api/app/unbind", JSONObject()), quick)
+
     /** 扫码绑定:一次性绑定码 → 长效设备 token。二维码内容 {server, store, code} */
     fun bind(server: String, store: String, code: String): JSONObject {
         val body = JSONObject()
             .put("store", store).put("code", code)
             .put("device", JSONObject()
+                .put("kind", "vision")   // 设备类型(契约 04):服务端"换新手机"默认只撤销播放手机,据此保留采集手机
                 .put("model", "${Build.BRAND} ${Build.MODEL}")
                 .put("sdk", Build.VERSION.SDK_INT)
                 .put("app_version", BuildConfig.VERSION_NAME)
