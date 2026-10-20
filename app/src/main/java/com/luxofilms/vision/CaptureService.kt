@@ -45,10 +45,13 @@ class CaptureService : LifecycleService() {
             )
             foregroundOk = true
             running = true
+            Alerts.clearStartFailure(this)
         } catch (e: Exception) {
-            // 后台启动(开机自启)的前台服务,安卓 14 起不允许是 camera 类型,会抛 SecurityException:
-            // 以前这里没接住,整个 APP 直接崩;现在留一条可见告警,让店员点进来手动开始(前台启动一定行)
-            Alerts.bootResumeFailed(this, e.javaClass.simpleName)
+            // 起不来有两类原因,告警要分开说(CameraPermission.startFailure):
+            // ① 摄像头权限被关(设置里撤销会让系统杀掉进程、服务随后被重启,走到这里)——店员得去开权限;
+            // ② 后台启动(开机自启)的前台服务,安卓 14 起不允许是 camera 类型,会抛 SecurityException——点进来手动开始(前台启动一定行)。
+            // 以前这里没接住,整个 APP 直接崩;后来只留了②的文案,①也被说成"手机重启后没能自动恢复"
+            Alerts.captureStartFailed(this, e)
             stopSelf()
             return
         }

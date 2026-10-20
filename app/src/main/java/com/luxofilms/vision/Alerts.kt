@@ -15,9 +15,32 @@ object Alerts {
     private const val ID_BOOT = 2101
     private const val ID_CAMERA = 2102
     private const val ID_BIND = 2103
+    private const val ID_PERM = 2104
 
-    fun bootResumeFailed(ctx: Context, reason: String?) =
-        post(ctx, ID_BOOT, "手机重启后弹幕采集没能自动恢复", "点这里打开 APP,再点“开始采集”。" + (reason?.let { "($it)" } ?: ""))
+    fun bootResumeFailed(ctx: Context, reason: String?) {
+        val (title, text) = CameraPermission.alertContent(CameraPermission.StartFailure.BACKGROUND_RESTRICTED, reason)
+        post(ctx, ID_BOOT, title, text)
+    }
+
+    /** 摄像头权限被关(设置里撤销、或装机后从没授权):和"后台启动被限制"分开说,店员才知道该去开权限。 */
+    fun cameraPermissionLost(ctx: Context) {
+        val (title, text) = CameraPermission.alertContent(CameraPermission.StartFailure.CAMERA_PERMISSION, null)
+        post(ctx, ID_PERM, title, text)
+    }
+
+    /** 前台服务起不来:按真实原因发对应的告警。 */
+    fun captureStartFailed(ctx: Context, e: Exception) {
+        when (CameraPermission.startFailure(CameraPermission.has(ctx))) {
+            CameraPermission.StartFailure.CAMERA_PERMISSION -> cameraPermissionLost(ctx)
+            CameraPermission.StartFailure.BACKGROUND_RESTRICTED -> bootResumeFailed(ctx, e.javaClass.simpleName)
+        }
+    }
+
+    /** 采集已经起来了:之前"起不来"的两条告警都作废。 */
+    fun clearStartFailure(ctx: Context) = runCatching {
+        NotificationManagerCompat.from(ctx).cancel(ID_BOOT)
+        NotificationManagerCompat.from(ctx).cancel(ID_PERM)
+    }
 
     fun cameraStalled(ctx: Context, detail: String) =
         post(ctx, ID_CAMERA, "弹幕采集:摄像头没有画面", detail)

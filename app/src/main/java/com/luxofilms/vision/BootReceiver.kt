@@ -18,6 +18,11 @@ class BootReceiver : BroadcastReceiver() {
         Prefs.init(context)
         // 没标定过没法采集(不知道拍哪块区域);店员主动停掉过的不自己再开
         if (!(Prefs.bound && Prefs.calibrated && Prefs.captureWanted)) return
+        // 摄像头权限被关了就不用硬拉服务(必然起不来):直接告诉店员去开权限
+        if (!CameraPermission.has(context)) {
+            Alerts.cameraPermissionLost(context)
+            return
+        }
         try {
             CaptureService.resume(context)
         } catch (e: Exception) {
