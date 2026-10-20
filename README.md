@@ -34,6 +34,9 @@
    画面每秒约刷新 2 次(实测)。预览页**不自己开摄像头**(会和采集抢),所以只有采集运行时才有画面;页面禁止截屏/录屏、保持亮屏,画面只在内存里、不保存不上传;
    离开页面即停止出图,不影响识别和上传的节奏。
 5. 服务有看门狗:摄像头长时间没有画面会自动重连并发告警;手机重启后会尝试自动恢复(后台启动相机在新版安卓上可能被系统限制,失败会发通知提示手动开始)。
+6. **弹幕来源提示(0.5.4 起,2026-10-20,在 `kain/2026101903` 分支,未合并、未发布)**:每家店的弹幕来源(协议采集 / 视觉采集 / 两者都收,缺省两者都收)由店员在**助播 APP「我的」**里改、总部也能改并锁定,**本 APP 不提供设置入口**。
+   来源设为"协议采集"时,云端不使用这台手机上传的弹幕(`/api/vision/text` 回 200 + `ignored:"source"`)。本 APP 此时在首页提示"这台上传的弹幕不会被使用",识别列表对应条目标"未使用"(不是"上传失败");
+   **采集与上传节奏完全不变**,来源改回后下一次上传就恢复被使用。提示来自上传回包与首页回到前台时的 `/api/me`(`danmaku_source` 字段,老云服务没有 → 不提示)。决策见大脑库 ADR-0033,对接事项见 [`docs/服务端对接事项.md`](docs/服务端对接事项.md) S8。
 
 ## 绑定失效与解除绑定
 
@@ -50,7 +53,7 @@
 ## 单元测试
 
 ```bat
-.\gradlew.bat testDebugUnitTest      :: 令牌失效判定、保留标定的解绑(app\build\reports\tests\testDebugUnitTest\index.html)
+.\gradlew.bat testDebugUnitTest      :: 136 项:令牌失效判定、保留标定的解绑、行合并与去重、弹幕来源提示等(app\build\reports\tests\testDebugUnitTest\index.html)
 ```
 
 ## 主要文件(`app/src/main/java/com/luxofilms/vision/`)
@@ -69,6 +72,7 @@
 | `PerspectiveMath.kt` | 纯 Kotlin 透视反算:把弹幕区(正视图矩形)映射回摄像头原图,供预览画框(可单元测试) |
 | `FrameGate.kt` | 每帧做 OCR / 只出预览 / 丢弃的判定(OCR 节奏与 429 冷却不受预览影响) |
 | `BindingGuard.kt` | 令牌失效判定(401/410+need_bind 才算)与失效后的统一善后(清绑定保留标定、停服务、告警) |
+| `DanmakuSourceState.kt` | 本店弹幕来源在这台手机上的已知状态(上传回包的 `ignored` + `/api/me` 的 `danmaku_source`),只决定首页要不要提示"上传的弹幕不会被使用"(纯 Kotlin,可单元测试) |
 | `Alerts.kt` / `BootReceiver.kt` | 告警通知与开机自启 |
 | `UpdateChecker.kt` | 应用内更新 |
 

@@ -11,6 +11,9 @@
     <string name="bind_code_hint">绑定码</string>
     <string name="bind_do">绑定</string>
 
+    <string name="source_dycast_notice">本店的弹幕来源设为“协议采集”,这台采集手机上传的弹幕不会被使用(采集照常运行,不用停)。要用视觉采集,请让店员在助播 APP「我的」里把弹幕来源改成“视觉采集”或“两者都收”。</string>
+    <string name="source_ignored_tag">未使用(本店弹幕来源为协议采集)</string>
+
     <string name="align_step1_title">第一步:对准直播手机屏幕</string>
     <string name="align_step1_hint">把另一台正在直播的手机完整放入框内,尽量撑满但不要超出画面,拖动四个角对齐屏幕四角。按住框内部可整体移动(形状不变)</string>
     <string name="align_step2_title">第二步:框出弹幕区域</string>

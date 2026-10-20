@@ -137,8 +137,9 @@ class MainActivity : AppCompatActivity() {
         lastTokenCheckAt = now
         io.execute {
             try {
-                Api.me()
-                ui.post { showStoreWarn(null) }
+                val me = Api.me()
+                DanmakuSourceState.noteFromMe(me.optString("danmaku_source"))   // 老云服务没有这个字段 → 不提示
+                ui.post { showStoreWarn(null); renderSourceNotice() }
             } catch (e: Api.ApiError) {
                 when (BindingGuard.classify(e)) {
                     BindingGuard.Verdict.TOKEN_INVALID -> ui.post {
@@ -157,6 +158,11 @@ class MainActivity : AppCompatActivity() {
     private fun showStoreWarn(text: String?) {
         b.statusWarn.text = text ?: ""
         b.statusWarn.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
+    }
+
+    /** 弹幕来源设为协议采集时提示"这台上传的弹幕不会被使用"(状态来自上传回包与 /api/me,见 DanmakuSourceState)。 */
+    private fun renderSourceNotice() {
+        b.statusSource.visibility = if (DanmakuSourceState.ignoredByServer) View.VISIBLE else View.GONE
     }
 
     private fun askNotificationPermission() {
@@ -221,6 +227,7 @@ class MainActivity : AppCompatActivity() {
         }
         b.btnToggleCapture.text = if (capturing) "停止采集" else "开始采集"
 
+        renderSourceNotice()
         renderRecognized()
     }
 
@@ -259,9 +266,18 @@ class MainActivity : AppCompatActivity() {
         for (e in list) {
             val head = SpannableStringBuilder(fmt.format(Date(e.ts))).append(" · ")
             val statusStart = head.length
-            head.append(if (e.uploaded) "已上传" else "上传失败,这几行已丢弃")
+            // 三种结果:已上传 / 上传成功但云端没使用(本店弹幕来源为协议采集,不是失败) / 上传失败
+            head.append(when {
+                e.ignored -> getString(R.string.source_ignored_tag)
+                e.uploaded -> "已上传"
+                else -> "上传失败,这几行已丢弃"
+            })
             head.setSpan(
-                ForegroundColorSpan(ContextCompat.getColor(this, if (e.uploaded) R.color.ok else R.color.bad)),
+                ForegroundColorSpan(ContextCompat.getColor(this, when {
+                    e.ignored -> R.color.warn
+                    e.uploaded -> R.color.ok
+                    else -> R.color.bad
+                })),
                 statusStart, head.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
             val headView = TextView(this).apply {

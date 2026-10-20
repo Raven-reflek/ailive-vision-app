@@ -61,9 +61,12 @@ object FrameProcessor {
         if (fresh.isEmpty()) return Result.OK
         val texts = fresh.map { it.text }
         return try {
-            Api.visionText(fresh.map { it.content })   // 只传内容,"昵称:" 前缀去掉(昵称 OCR 不可靠,服务端也是固定占位昵称)
+            val resp = Api.visionText(fresh.map { it.content })   // 只传内容,"昵称:" 前缀去掉(昵称 OCR 不可靠,服务端也是固定占位昵称)
+            // 本店弹幕来源设为协议采集时,云端回 200 + ignored:"source":没被使用,但不是失败 —— 照常记账防重复,识别列表标"未使用"
+            val ignored = resp.optString("ignored") == "source"
+            DanmakuSourceState.noteUpload(ignored, resp.optString("danmaku_source"))
             deduper.commit(fresh, now)
-            RecognizedLog.add(texts, uploaded = true)
+            RecognizedLog.add(texts, uploaded = true, ignored = ignored)
             Result.OK
         } catch (e: Api.ApiError) {
             Log.w(TAG, "上传失败 HTTP ${e.code}:${e.message}")

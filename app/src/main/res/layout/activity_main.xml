@@ -59,6 +59,17 @@
                 android:textColor="@color/bad"
                 android:textSize="13.5sp"
                 android:visibility="gone" />
+
+            <!-- 本店弹幕来源设为"协议采集"时:这台手机上传的弹幕云端不会使用(ADR-0033)。采集照常运行,只是提示一句 -->
+            <TextView
+                android:id="@+id/statusSource"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/warn"
+                android:textSize="13.5sp"
+                android:text="@string/source_dycast_notice"
+                android:visibility="gone" />
         </LinearLayout>
 
         <!-- 最近识别到的内容:装机/调试时用肉眼核对摄像头认出了什么,不用连电脑翻日志。
