@@ -45,10 +45,36 @@ class CameraAlignActivity : AppCompatActivity() {
     private var step = 1
     private var finishedNormally = false   // 是否走完 finishCalibration();false 时 onDestroy 还要兜底把采集接回去
 
+    private var awaitingSettings = false   // 已把店员送去系统设置开权限,回到本页时要重新检查
+
+    // 被拒不再只弹一下就退出:首次绑定后回退栈里没有首页,直接 finish() 会退出整个 APP;
+    // 选了"不再询问"后授权窗口也弹不出来,必须引导去系统设置
     private val requestCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startCamera() else {
-            Toast.makeText(this, "需要摄像头权限才能标定", Toast.LENGTH_LONG).show()
-            finish()
+        if (granted) startCamera() else showPermissionDenied()
+    }
+
+    private fun showPermissionDenied() {
+        val outcome = CameraPermission.outcome(false, shouldShowRequestPermissionRationale(Manifest.permission.CAMERA))
+        CameraPermission.showDenied(
+            this, outcome,
+            onRetry = { requestCamera.launch(Manifest.permission.CAMERA) },
+            onGoSettings = { awaitingSettings = true; CameraPermission.openSettings(this) },
+            onCancel = { backToHome() },
+        )
+    }
+
+    /** 返回首页。显式回到 MainActivity(singleTask):首次绑定后是 Bind → 标定,回退栈里没有首页。 */
+    private fun backToHome() {
+        startActivity(Intent(this, MainActivity::class.java))
+        finish()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 从系统设置回来:开了就接着标定,还没开就再给一次出路
+        if (awaitingSettings) {
+            awaitingSettings = false
+            if (CameraPermission.has(this)) startCamera() else showPermissionDenied()
         }
     }
 
@@ -61,10 +87,7 @@ class CameraAlignActivity : AppCompatActivity() {
 
         // 返回首页。显式回到 MainActivity(singleTask):首次绑定后是 Bind → 标定,回退栈里没有首页,
         // 光 finish() 会直接退出 APP。没走完标定就离开,onDestroy 会把采集接回去(见下)
-        b.btnBack.setOnClickListener {
-            startActivity(Intent(this, MainActivity::class.java))
-            finish()
-        }
+        b.btnBack.setOnClickListener { backToHome() }
         b.btnNext.setOnClickListener { onNextClicked() }
         b.btnRetake.setOnClickListener { retakeReference() }
 

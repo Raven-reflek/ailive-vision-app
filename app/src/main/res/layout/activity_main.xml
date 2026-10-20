@@ -60,6 +60,17 @@
                 android:textSize="13.5sp"
                 android:visibility="gone" />
 
+            <!-- 摄像头权限没开:点"开始采集"会引导授权 / 去系统设置;不开采集一定起不来 -->
+            <TextView
+                android:id="@+id/statusCamera"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/bad"
+                android:textSize="13.5sp"
+                android:text="@string/camera_permission_off"
+                android:visibility="gone" />
+
             <!-- 本店弹幕来源设为"协议采集"时:这台手机上传的弹幕云端不会使用(ADR-0033)。采集照常运行,只是提示一句 -->
             <TextView
                 android:id="@+id/statusSource"

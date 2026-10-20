@@ -41,6 +41,13 @@ class MainActivity : AppCompatActivity() {
     // 安卓 13+ 通知要运行时授权;没授权的话前台服务的通知和所有告警都看不到,等于采集出了问题也没人知道
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    // 摄像头权限:点"开始采集"时才要(采集前必须有,服务才起得来)。被拒不是死胡同:还能再问就重新授权,
+    // 选了"不再询问"就引导去系统设置,回来后自动接着开始采集
+    private var awaitingSettings = false
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startCaptureNow() else showCameraDenied()
+    }
+
     private val refresh = object : Runnable {
         override fun run() {
             render()
@@ -105,15 +112,47 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this, CameraAlignActivity::class.java))
                 return@setOnClickListener
             }
-            if (capturing) CaptureService.stop(this) else CaptureService.start(this)
-            // 服务启停是异步的:稍等一下再刷新,不然刚点完界面还是旧状态
-            ui.postDelayed({ render() }, 400)
-            render()
+            if (capturing) {
+                CaptureService.stop(this)
+                afterToggle()
+            } else if (CameraPermission.has(this)) {
+                startCaptureNow()
+            } else {
+                cameraPermission.launch(Manifest.permission.CAMERA)   // 起服务之前先拿权限,不让它起不来再报错
+            }
         }
+    }
+
+    private fun startCaptureNow() {
+        Alerts.clearStartFailure(this)
+        CaptureService.start(this)
+        afterToggle()
+    }
+
+    private fun afterToggle() {
+        // 服务启停是异步的:稍等一下再刷新,不然刚点完界面还是旧状态
+        ui.postDelayed({ render() }, 400)
+        render()
+    }
+
+    private fun showCameraDenied() {
+        render()
+        val outcome = CameraPermission.outcome(false, shouldShowRequestPermissionRationale(Manifest.permission.CAMERA))
+        CameraPermission.showDenied(
+            this, outcome,
+            onRetry = { cameraPermission.launch(Manifest.permission.CAMERA) },
+            onGoSettings = { awaitingSettings = true; CameraPermission.openSettings(this) },
+            onCancel = { },
+        )
     }
 
     override fun onResume() {
         super.onResume()
+        // 从系统设置回来:权限开了就接着开始采集(店员刚才点的就是"开始采集");没开就算了,首页会继续提示
+        if (awaitingSettings) {
+            awaitingSettings = false
+            if (Prefs.bound && Prefs.calibrated && !capturing && CameraPermission.has(this)) startCaptureNow()
+        }
         render()
         ui.post(refresh)
         // 静默检查更新:这个APP只有一个 MainActivity(不像门店APP底部四个tab互相重建导致
@@ -226,6 +265,9 @@ class MainActivity : AppCompatActivity() {
             else -> "采集状态:运行中"
         }
         b.btnToggleCapture.text = if (capturing) "停止采集" else "开始采集"
+
+        // 标定过但摄像头权限没开:采集一定起不来,在首页明说(没标定过时标定页自己会要权限,不在这里吵)
+        b.statusCamera.visibility = if (Prefs.calibrated && !CameraPermission.has(this)) View.VISIBLE else View.GONE
 
         renderSourceNotice()
         renderRecognized()
