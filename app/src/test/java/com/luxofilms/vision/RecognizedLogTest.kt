@@ -21,6 +21,21 @@ class RecognizedLogTest {
         assertFalse(r[0].uploaded)
     }
 
+    @Test fun add_ignoredBySource_isNeitherUploadedNorFailed() {
+        // 上传成功但云端按"弹幕来源=协议采集"没使用:首页要标"未使用",不能当成"已上传",也不能当成"上传失败"
+        RecognizedLog.add(listOf("被忽略的一条"), uploaded = true, ignored = true)
+        val e = RecognizedLog.recent().single()
+        assertTrue(e.ignored)
+        assertFalse(e.uploaded)
+    }
+
+    @Test fun add_defaultIsNotIgnored() {
+        RecognizedLog.add(listOf("正常"), uploaded = true)
+        val e = RecognizedLog.recent().single()
+        assertFalse(e.ignored)
+        assertTrue(e.uploaded)
+    }
+
     @Test fun entryIds_areUniqueAndIncreasing_soUiCanAnchorOnThem() {
         repeat(5) { RecognizedLog.add(listOf("行$it"), uploaded = true) }
         val ids = RecognizedLog.recent().map { it.id }          // 新的在前

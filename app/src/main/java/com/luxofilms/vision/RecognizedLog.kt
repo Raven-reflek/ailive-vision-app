@@ -10,7 +10,8 @@ package com.luxofilms.vision
  */
 object RecognizedLog {
     /** id:进程内唯一、递增。首页重建列表时靠它认出"店员正在看的那一条",新条目插在上面也不会把它顶走。 */
-    data class Entry(val id: Long, val ts: Long, val lines: List<String>, val uploaded: Boolean)
+    /** ignored:上传成功了,但云端按本店"弹幕来源=协议采集"的设置没有使用它(DanmakuSourceState)。此时 uploaded 为 false。 */
+    data class Entry(val id: Long, val ts: Long, val lines: List<String>, val uploaded: Boolean, val ignored: Boolean = false)
 
     private const val MAX = 20
     private val lock = Any()
@@ -18,10 +19,10 @@ object RecognizedLog {
     private var version = 0
     private var nextId = 1L
 
-    fun add(lines: List<String>, uploaded: Boolean) {
+    fun add(lines: List<String>, uploaded: Boolean, ignored: Boolean = false) {
         if (lines.isEmpty()) return
         synchronized(lock) {
-            entries.addFirst(Entry(nextId++, System.currentTimeMillis(), lines, uploaded))
+            entries.addFirst(Entry(nextId++, System.currentTimeMillis(), lines, uploaded && !ignored, ignored))
             while (entries.size > MAX) entries.removeLast()
             version++
         }

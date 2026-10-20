@@ -54,6 +54,7 @@ object BindingGuard {
     fun clearBindingAndStop(ctx: Context, notice: String, alert: Boolean): Boolean {
         if (!Prefs.bound) return false
         Prefs.clearBinding(notice)
+        DanmakuSourceState.reset()          // 别带着上一家店的弹幕来源状态去绑定下一家
         CaptureService.stop(ctx)
         if (alert) Alerts.bindingInvalid(ctx)
         return true
