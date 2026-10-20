@@ -21,6 +21,18 @@
 每次发版同时改 `app/build.gradle.kts` 里的 `versionCode`(+1)和 `versionName`。发布走应用内更新通道:APK 命名 `vision-<版本>.apk`,
 调云服务 `/admin/release` 登记时必须带 `"app":"vision"`。
 
+**发布签名(0.5.2 起)**:`assembleRelease` 读工程根目录的 `keystore.properties`(已 gitignore,证书和口令由负责人保管、不在仓库里),格式:
+
+```properties
+storeFile=<证书文件的绝对路径,用正斜杠>
+storePassword=...
+keyAlias=vision
+keyPassword=...
+```
+
+没有这个文件会退回 debug 签名,打出的包**装不上已装发布版的手机**;发版前用 `apksigner verify --print-certs <apk>` 核对证书指纹(见云服务 `docs/交接与启动说明.md` 的"签名"一节)。
+0.5.1 及更早的版本是另一把 debug 签名,不能应用内更新到 0.5.2,要先卸载再装。证书丢了就只能让所有手机卸载重装,务必备份。
+
 ## 使用流程
 
 1. 首次打开扫总部绑定二维码,绑定到测试门店(设备令牌加密保存)。
