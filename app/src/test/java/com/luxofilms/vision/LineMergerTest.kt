@@ -149,6 +149,63 @@ class LineMergerTest {
         assertEquals("比分 3:2 稳了", LineMerger.splitNickname("某某:比分 3:2 稳了"))
     }
 
+    // ── 2026-10-22 真实直播测试(ADR-0037):计时器 / 计数 / 匿名昵称粘在行首 ──
+    // 样例与云服务 tests/vision_field_cases.py 的 PREFIX_CASES / PREFIX_UNCHANGED 一一对应,两边规则必须保持一致
+    private val prefixCases = listOf(
+        "15:0053抖音用户主播PKT下,有助于提升人气和购" to "主播PKT下,有助于提升人气和购",
+        "00:55抖音用户,弹总部都得先知道这改字,这个稍等主播为您详细解答" to "弹总部都得先知道这改字,这个稍等主播为您详细解答",
+        "抖音用户,弹总部都得先知道" to "弹总部都得先知道",
+        "抖音用户.价格多少" to "价格多少",
+        "抖音用户;价格多少" to "价格多少",
+        "抖音用户 价格多少" to "价格多少",
+        "抖音用户价格多少" to "价格多少",
+        "抖音用户:价格多少" to "价格多少",
+        "抖音用户：价格多少" to "价格多少",
+        "15:00 小明:能洗车吗" to "能洗车吗",
+        "02:31小明:能洗车吗" to "能洗车吗",
+    )
+    private val prefixUnchanged = listOf(
+        "价格:多少钱", "注意:施工前请验货", "抖音用户很多", "抖音用户都能看到吗", "3:30到店可以吗", "今天15:00还营业吗",
+        "能洗车吗", "抖音用户", "抖音用户,", "小明,能洗车吗", "15:00", "00:55",
+    )
+
+    @Test fun stripPrefix_fieldCases() {
+        for ((src, want) in prefixCases) assertEquals(src, want to true, LineMerger.stripPrefix(src))
+    }
+
+    @Test fun stripPrefix_leavesEverythingElseAlone() {
+        for (t in prefixUnchanged) assertEquals(t, t to false, LineMerger.stripPrefix(t))
+    }
+
+    @Test fun splitNickname_stripsTimerAndAnonymousNickname() {
+        for ((src, want) in prefixCases) assertEquals(src, want, LineMerger.splitNickname(src))
+        assertEquals("好看", LineMerger.splitNickname("某某:好看"))            // 老行为不变
+    }
+
+    @Test fun splitNickname_timeInsideTheMessageIsKept() {
+        assertEquals("3:30到店可以吗", LineMerger.splitNickname("3:30到店可以吗"))
+        assertEquals("今天15:00还营业吗", LineMerger.splitNickname("今天15:00还营业吗"))
+    }
+
+    @Test fun timerOnlyRowsAreDroppedBeforeMerging() {
+        val items = LineMerger.merge(listOf(line("15:00", 60, right = 90), line("甲:能洗车吗", 100), line("00:55 12", 140, right = 120)), IMG_H)
+        assertEquals(listOf("甲:能洗车吗"), texts(items))
+    }
+
+    @Test fun timerPlusNicknameRowIsAStartLineAndNotMergedIntoThePreviousRow() {
+        // 上一行写满、间距小,本来会被并成续行;但这一行带计时器 + 昵称,是新的一条
+        val lines = listOf(line("甲:这是一条写满了的很长的弹幕内容呀呀呀呀", 100), line("15:00 小明:能洗车吗", 130))
+        val items = LineMerger.merge(lines, IMG_H)
+        assertEquals(2, items.size)
+        assertEquals("能洗车吗", items[1].content)
+    }
+
+    @Test fun anonymousNicknameRowIsAStartLine() {
+        val lines = listOf(line("甲:这是一条写满了的很长的弹幕内容呀呀呀呀", 100), line("抖音用户,价格多少", 130))
+        val items = LineMerger.merge(lines, IMG_H)
+        assertEquals(listOf("这是一条写满了的很长的弹幕内容呀呀呀呀", "价格多少"), items.map { it.content })
+    }
+
     // ── 贴边标记 ──
     @Test fun atEdge_topAndBottomTouching() {
         val lines = listOf(

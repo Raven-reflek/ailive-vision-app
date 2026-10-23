@@ -40,7 +40,8 @@ object LineMerger {
     const val NICK_MAX_CHARS = 15
 
     fun merge(lines: List<OcrLine>, imageHeight: Int): List<Item> {
-        val rows = groupRows(lines.filter { it.text.isNotBlank() })
+        // 纯计时器行(PK 倒计时 `15:00` 之类的小部件)不是弹幕,在这里就丢掉
+        val rows = groupRows(lines.filter { it.text.isNotBlank() && !TIMER_ONLY.matches(it.text) })
         if (rows.isEmpty()) return emptyList()
 
         val nickRows = rows.filter { nickColon(it.text) >= 0 }
@@ -64,16 +65,63 @@ object LineMerger {
         }
     }
 
-    /** 去掉 "昵称:" 前缀只留内容;没有昵称前缀(或前缀只是数字,如 "3:30")就原样返回。昵称丢了只剩开头冒号(":好像有点制")也会去掉冒号。 */
+    /**
+     * 去掉 "昵称:" 前缀只留内容;没有昵称前缀(或前缀只是数字,如 "3:30")就原样返回。昵称丢了只剩开头冒号(":好像有点制")也会去掉冒号。
+     * 2026-10-22 起(ADR-0037)先剥行首的计时器 / 计数 / 匿名昵称"抖音用户"(见 [stripPrefix]):
+     * 真实直播里 `15:00 小明:能洗车吗` 的第一个冒号在时间里,`00:55抖音用户,…` 的冒号被 OCR 读成了逗号,以前都拆不掉。
+     */
     fun splitNickname(text: String): String {
+        val (stripped, changed) = stripPrefix(text)
+        if (changed) return stripped
         val idx = nickColon(text)
         if (idx < 0) return text
         val content = text.substring(idx + 1).trim()
         return content.ifEmpty { text }
     }
 
-    /** 这一行是否一条新弹幕的开头:带 "昵称:" 前缀,或是系统提示。 */
-    fun isStartLine(text: String): Boolean = nickColon(text) >= 0 || isSystemLine(text)
+    /** 这一行是否一条新弹幕的开头:带 "昵称:" 前缀、带计时器 / 匿名昵称前缀,或是系统提示。 */
+    fun isStartLine(text: String): Boolean = nickColon(text) >= 0 || isSystemLine(text) || stripPrefix(text).second
+
+    /** 行首的计时器(`15:00`、`00:55`)和紧跟的计数(`15:0053`):PK 倒计时、在线人数这类小部件常被 ML Kit 并进弹幕那一行。 */
+    private val TIMER_PREFIX = Regex("^\\s*\\d{1,2}[:：]\\d{2}(?:[:：]\\d{2})?\\s*(\\d{1,3}(?=\\D))?\\s*")
+    private val TIMER_ONLY = Regex("^\\s*\\d{1,2}[:：]\\d{2}(?:[:：]\\d{2})?\\s*\\d{0,3}\\s*$")
+    private val ANON_NICKS = listOf("抖音用户", "神秘人")
+    private const val ANON_SEPS = " \t,，.。;；:：、"
+    private const val ANON_NO_SEP_NOT_BEFORE = "的很都是也有在不就还又更最太"       // `抖音用户很多` 是正文,不是昵称 + 内容
+
+    /**
+     * 去掉行首的计时器 / 计数 / 匿名昵称"抖音用户"(含被 OCR 读错的分隔符),返回 (剩下的文字, 有没有改动)。规则与服务端 vision_clean.strip_prefix 一致。
+     * - 计时器只在后面跟着计数、匿名昵称或 `昵称:` 时才剥("3:30到店可以吗"里的时间是正文);
+     * - 匿名昵称后跟 `, . ; : 、` 或空格就剥;什么分隔符都没有时,剩下 ≥3 个字且不是"很多/都能…"这类连接词开头才剥;
+     * - 剥完什么都不剩就原样返回。普通昵称后被读成逗号的情形分不清是不是正文逗号(`价格,多少钱`),**不处理**。
+     */
+    fun stripPrefix(text: String): Pair<String, Boolean> {
+        val t = text.trim()
+        var out = t
+        val m = TIMER_PREFIX.find(out)
+        if (m != null && m.range.last + 1 < out.length) {
+            val rest = out.substring(m.range.last + 1)
+            val idx = rest.indexOfFirst { it == ':' || it == '：' }
+            val nickColon = idx in 1..NICK_MAX_CHARS && !rest.substring(0, idx).trim().all { it.isDigit() } && rest.substring(idx + 1).isNotBlank()
+            if (m.groups[1] != null || ANON_NICKS.any { rest.startsWith(it) } || nickColon) {
+                out = if (nickColon) rest.substring(idx + 1) else rest
+            }
+        }
+        out = out.trim()
+        for (nick in ANON_NICKS) {
+            if (!out.startsWith(nick)) continue
+            var rest = out.substring(nick.length)
+            if (rest.isNotEmpty() && rest[0] in ANON_SEPS) {
+                rest = rest.trimStart { it in ANON_SEPS }
+                if (rest.length >= 2) out = rest
+            } else if (rest.length >= 3 && rest[0] !in ANON_NO_SEP_NOT_BEFORE) {
+                out = rest
+            }
+            break
+        }
+        out = out.trim()
+        return if (out.isEmpty() || out == t) t to false else out to true
+    }
 
     /**
      * 进场等系统提示(没有冒号,单独成条),不会有续行。
@@ -83,13 +131,22 @@ object LineMerger {
 
     private val SYSTEM_TAIL = Regex("[来業]了[\\s!！。.~～]*$|送出了|关注了主播|加入了粉丝团")
 
-    /** "昵称:" 冒号的位置;没有则 -1。冒号前若只有数字(时间 "3:30"、比分)不算昵称。 */
+    /**
+     * "昵称:" 冒号的位置;没有则 -1。冒号前若只有数字不算昵称;**两边都是数字的冒号(时间 `15:00`、比分 `3:2`)根本不是分隔符,跳过**:
+     * `15:00 小明:能洗车吗` 要找到 `小明:` 那个冒号,`今天15:00还营业吗` 里的冒号也不能把"今天15"当昵称切掉(2026-10-22)。
+     */
     private fun nickColon(text: String): Int {
-        val idx = text.indexOfFirst { it == ':' || it == '：' }
-        if (idx < 0 || idx > NICK_MAX_CHARS) return -1
-        val prefix = text.substring(0, idx).trim()
-        if (prefix.isNotEmpty() && prefix.all { it.isDigit() }) return -1
-        return idx
+        for (i in text.indices) {
+            val c = text[i]
+            if (c != ':' && c != '：') continue
+            if (i > NICK_MAX_CHARS) return -1
+            val timeLike = i > 0 && text[i - 1].isDigit() && i + 1 < text.length && text[i + 1].isDigit()
+            if (timeLike) continue
+            val prefix = text.substring(0, i).trim()
+            if (prefix.isNotEmpty() && prefix.all { it.isDigit() }) return -1
+            return i
+        }
+        return -1
     }
 
     private fun continues(prev: Row, row: Row, maxRight: Int): Boolean {
