@@ -41,7 +41,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="只读预览:看摄像头拍到了什么、屏幕和弹幕区框得准不准。画面只在本机显示,不保存、不上传,本页禁止截屏。"
+            android:text="只读预览:看摄像头拍到了什么、屏幕和弹幕区框得准不准。画面只在本机显示,不保存、不上传(下方“诊断记录”是你主动打开才会记,见那一栏的说明),本页禁止截屏。"
             android:textColor="@color/muted"
             android:textSize="13sp" />
 
@@ -206,6 +206,62 @@
                     android:contentDescription="弹幕区域裁剪后、送去文字识别的图像"
                     android:scaleType="fitCenter"
                     android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- 诊断包(排查识别问题用,ADR-0038):缺省关、15 分钟自动停止、只在你点"导出"时才生成文件 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card_white"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="诊断记录(排查识别问题用)"
+                        android:textColor="@color/ink"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/diagSwitch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:contentDescription="开启诊断记录" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/diagStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:textColor="@color/ink"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="打开后,采集会把最近 12 帧的识别用图和识别细节记在本机内存里,15 分钟后自动停止。点「导出」才会生成一个文件并让你选择发给谁;不会自动上传。图里是直播间画面(含观众昵称和弹幕),请妥善保管。关闭或到时间后记录即清空。"
+                    android:textColor="@color/muted"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btnDiagExport"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="导出诊断包" />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 诊断包(ADR-0038):导出的 zip 只写在 cacheDir/diag/,FileProvider 只能分享这个目录里的文件 -->
+<paths>
+    <cache-path name="diag" path="diag/" />
+</paths>
