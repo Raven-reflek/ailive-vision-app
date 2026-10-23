@@ -35,6 +35,9 @@ object FrameProcessor {
     /** 最近上传过的弹幕(模糊判重)。只在 CaptureService 的单线程 Analyzer 里用;进程内常驻,窗口过期后自然清空。 */
     private val deduper = DanmakuDeduper()
 
+    /** 读对过冒号的昵称(同一位观众后面冒号被 OCR 读丢时据此剥昵称)。同样只在 Analyzer 单线程里用,见 [NickMemory]。 */
+    private val nicks = NickMemory()
+
     /** 处理一帧并上传;成功/失败都不抛到调用方之外炸掉采集循环,内部吞掉异常只记日志。
      * 返回值区分"服务端限流"和"其它失败",调用方(CaptureService)据此决定要不要退避——
      * 以前不管什么原因失败都只是静默丢弃、下一帧照样按原节奏再打一次,遇到限流等于白打
@@ -43,21 +46,28 @@ object FrameProcessor {
      * 识别出的内容(不管上传成不成功)都记进 RecognizedLog,首页拿它实时展示"摄像头认出了什么"——
      * 装机/调试时用肉眼比对实际弹幕,比连电脑翻日志方便太多(2026-09-28 加)。 */
     fun process(proxy: ImageProxy, calibration: Calibration, publishPreview: Boolean = false): Result {
+        var diag: DiagFrame? = null            // 诊断包开着时,这一帧的识别细节(ADR-0038);缺省关,开着也只放内存
         val items: List<LineMerger.Item> = try {
             val f = prepare(proxy, calibration)
             // 预览页打开时顺手发布一份(缩小的拷贝,不影响下面送去识别的原图);发布失败不能影响识别
             if (publishPreview) publishPreview(f.upright, if (PreviewBus.cropWanted) f.enhanced else null, calibration)
-            // 视觉行 → 弹幕条:折成两行的弹幕合回一条,不再各问一次(2026-10-15 修)
-            LineMerger.merge(recognizeLocally(f.enhanced), f.enhanced.height)
+            val wantDiag = Diagnostics.enabled
+            val rec = recognizeLocally(f.enhanced, wantDiag)
+            if (wantDiag) diag = try {
+                DiagFrame(System.currentTimeMillis(), f.enhanced.width, f.enhanced.height, Diagnostics.jpeg(f.enhanced), rec.detail)
+            } catch (e: Throwable) { Log.w(TAG, "诊断帧记录失败:${e.message}"); null }       // 诊断是锦上添花,绝不能连累识别
+            // 视觉行 → 弹幕条:折成两行的弹幕合回一条,不再各问一次(2026-10-15 修);昵称冒号丢了时用读对过的昵称剥(ADR-0038)
+            LineMerger.merge(rec.lines, f.enhanced.height, nicks)
         } catch (e: Exception) {
             Log.w(TAG, "这一帧处理/识别失败,丢弃:${e.message}")
             return Result.ERROR
         }
         val now = System.currentTimeMillis()
         if (PreviewBus.active) PreviewBus.noteLines(items.map { it.text }, now)
-        if (items.isEmpty()) return Result.OK   // 这一帧弹幕区域没识别到文字,不算失败,也没什么好上传的
         // 同一条弹幕会在画面上停留很多帧、每帧的 OCR 错字还不一样:只上传没见过的,识别日志也只记这些
-        val fresh = deduper.select(items, now)
+        val fresh = if (items.isEmpty()) emptyList() else deduper.select(items, now)
+        diag?.let { Diagnostics.record(it.withResult(items, fresh.map { i -> i.content })) }
+        if (items.isEmpty()) return Result.OK   // 这一帧弹幕区域没识别到文字,不算失败,也没什么好上传的
         if (fresh.isEmpty()) return Result.OK
         val texts = fresh.map { it.text }
         return try {
@@ -191,17 +201,31 @@ object FrameProcessor {
      * 返回带位置的视觉行(Line 粒度)。Line 是视觉行:一条弹幕折成两行就是两个 Line,
      * 所以后面要用位置和文字特征把它们合回一条(LineMerger)。
      */
-    private fun recognizeLocally(bmp: Bitmap): List<OcrLine> {
+    private class Recognized(val lines: List<OcrLine>, val detail: List<DiagLine>)
+
+    private fun recognizeLocally(bmp: Bitmap, detail: Boolean = false): Recognized {
         val image = InputImage.fromBitmap(bmp, 0)
         val result = Tasks.await(recognizer.process(image), 8, TimeUnit.SECONDS)
         var fallbackTop = 0
-        return result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
+        val rawLines = result.textBlocks.flatMap { it.lines }
+        val lines = rawLines.mapNotNull { line ->
             val text = line.text.trim()
             if (text.isEmpty()) return@mapNotNull null
             val b = line.boundingBox
             if (b != null) OcrLine(text, b.left, b.top, b.right, b.bottom)
             else { fallbackTop += 1000; OcrLine(text, 0, fallbackTop, 10, fallbackTop + 10) }   // 没有位置(理论上不会):互相隔开,不合并
         }
+        // 诊断包开着时再收每个词的框和取样颜色(平时一点额外开销都没有)
+        val diag = if (!detail) emptyList() else rawLines.mapNotNull { line ->
+            val text = line.text.trim()
+            if (text.isEmpty()) return@mapNotNull null
+            val b = line.boundingBox
+            DiagLine(text, b?.let { listOf(it.left, it.top, it.right, it.bottom) }, line.elements.map { e ->
+                val eb = e.boundingBox
+                DiagElement(e.text, eb?.let { listOf(it.left, it.top, it.right, it.bottom) }, Diagnostics.sampleInk(bmp, eb))
+            })
+        }
+        return Recognized(lines, diag)
     }
 
     /**

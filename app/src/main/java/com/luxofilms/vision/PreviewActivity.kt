@@ -50,6 +50,12 @@ class PreviewActivity : AppCompatActivity() {
             if (!Prefs.calibrated) startActivity(Intent(this, CameraAlignActivity::class.java))
             else CaptureService.start(this)
         }
+        b.diagSwitch.setOnCheckedChangeListener { _, checked ->
+            if (checked == Diagnostics.enabled) return@setOnCheckedChangeListener      // 界面按状态刷新开关时触发的,不是人点的
+            if (checked) Diagnostics.enable() else Diagnostics.disable(this)
+            renderDiag()
+        }
+        b.btnDiagExport.setOnClickListener { exportDiagnostics() }
     }
 
     override fun onResume() {
@@ -67,7 +73,39 @@ class PreviewActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    /** 诊断记录的开关与状态文字:每次刷新都按 [Diagnostics] 的实际状态来(到时间自动关、别处关了都跟着变)。 */
+    private fun renderDiag() {
+        Diagnostics.tick(this)
+        val on = Diagnostics.enabled
+        if (b.diagSwitch.isChecked != on) b.diagSwitch.isChecked = on
+        val n = Diagnostics.count()
+        b.diagStatus.text = when {
+            on -> "记录中:已记 $n / ${Diagnostics.MAX_FRAMES} 帧,还剩约 ${(Diagnostics.remainingMs() + 59_999) / 60_000} 分钟自动停止"
+            n > 0 -> "已停止,内存里还有 $n 帧,可以导出"
+            else -> "未开启"
+        }
+        b.btnDiagExport.isEnabled = n > 0
+    }
+
+    /** 生成 zip 并调起系统分享(FileProvider,只读授权给选中的那个应用)。 */
+    private fun exportDiagnostics() {
+        val file = try { Diagnostics.exportZip(this) } catch (e: Exception) { null }
+        if (file == null) {
+            android.widget.Toast.makeText(this, "还没有可导出的帧:先打开诊断记录,让采集跑一会儿", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.diag", file)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "视觉采集诊断包 ${file.name}")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(send, "发送诊断包"))
+    }
+
     private fun render() {
+        renderDiag()
         if (!Prefs.bound) {
             // 预览期间绑定被清掉(令牌失效 / 解除绑定):回首页,首页会再转去绑定页
             startActivity(Intent(this, MainActivity::class.java))
