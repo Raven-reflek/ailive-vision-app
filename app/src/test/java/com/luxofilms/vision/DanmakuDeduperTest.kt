@@ -74,6 +74,59 @@ class DanmakuDeduperTest {
         assertEquals(1, d.select(listOf(item("甲:贴膜多少钱一平"), item("乙:贴膜多少钱一平呢")), 0).size)
     }
 
+    // ── 差一个编号 / 一个商品名的两个问题(2026-10-23 真机:1号链接 和 2号链接 前后脚被问,第二条被当重复吞了)──
+    @Test fun numberedLinkQuestions_areDifferentQuestions() {
+        val d = DanmakuDeduper()
+        assertEquals(1, d.upload(0, "介绍一下1号链接").size)
+        assertEquals("相似度 0.88 但编号不同", 1, d.upload(2_000, "介绍一下2号链接").size)
+        assertEquals(1, d.upload(4_000, "介绍一下3号链接").size)
+        assertTrue("同一条再被拍到仍是重复", d.upload(6_000, "介绍一下2号链接").isEmpty())
+    }
+
+    @Test fun chineseNumeralLinkQuestions_areDifferentQuestions_andSameNumberInEitherScriptIsOne() {
+        val d = DanmakuDeduper()
+        assertEquals(1, d.upload(0, "介绍一下二号链接").size)
+        assertEquals(1, d.upload(2_000, "介绍一下三号链接").size)
+        assertEquals(1, d.upload(4_000, "介绍一下十二号链接").size)
+        assertTrue("2 号写成阿拉伯数字也是同一条", d.upload(6_000, "介绍一下2号链接").isEmpty())
+        assertEquals(1, d.upload(8_000, "第二个链接怎么样").size)
+        assertEquals("第二个 / 第三个", 1, d.upload(10_000, "第三个链接怎么样").size)
+    }
+
+    @Test fun numberConflict_toleratesBadgeDigitsAndMissingDigits() {
+        assertFalse("行首粉丝等级徽章的 2 读进来了", DanmakuDeduper.numbersConflict("介绍一下1号链接", "2月岛出逃指南介绍一下1号链接"))
+        assertFalse("OCR 丢了数字:只一边有数字不算冲突", DanmakuDeduper.numbersConflict("介绍一下1号链接", "介绍一下号链接"))
+        assertTrue(DanmakuDeduper.numbersConflict("介绍一下1号链接", "2月岛出逃指南介绍一下2号链接"))
+        assertTrue("多出来的数字不在前面、对不上结尾", DanmakuDeduper.numbersConflict("介绍2号链接", "2月岛出逃指南介绍1号链接"))
+        assertTrue(DanmakuDeduper.numbersConflict("蓝晶灵BS7是什么", "蓝晶灵BS5是什么"))
+        assertTrue(DanmakuDeduper.numbersConflict("介绍一下12号链接", "介绍一下1号链接"))
+        assertFalse("一下 的 一 不是数字", DanmakuDeduper.numbersConflict("介绍一下链接", "介绍一下链接多少钱"))
+    }
+
+    @Test fun sameTemplateDifferentSubject_areDifferentQuestions_butOcrJitterIsStillOne() {
+        val d = DanmakuDeduper()
+        assertEquals(1, d.upload(0, "固驰是什么牌子").size)
+        assertEquals("相似度 0.67:共用 5 字后缀,换了主语", 1, d.upload(2_000, "蓝晶灵是什么牌子").size)
+        assertEquals("相似度 0.71:共用 5 字前缀,换了问法的后半句", 1, d.upload(4_000, "固驰是什么材质").size)
+        // 一两个字的 OCR 抖动仍是同一条
+        assertTrue(d.upload(6_000, "固驰是什么牌了").isEmpty())
+        assertTrue(d.upload(8_000, "固驰是什么牌").isEmpty())
+        assertTrue(d.upload(10_000, "固池是什么牌子").isEmpty())
+    }
+
+    @Test fun subjectSwapped_needsASharedTemplateAndNoCharInCommonBetweenTheDifferingParts() {
+        fun swapped(a: String, b: String) = DanmakuDeduper.subjectSwapped(DanmakuDeduper.normalize(a), DanmakuDeduper.normalize(b))
+        assertTrue(swapped("固驰是什么牌子", "蓝晶灵是什么牌子"))
+        assertTrue(swapped("固驰是什么牌子", "固驰是什么材质"))
+        assertFalse("只差一个字", swapped("固驰是什么牌子", "固驰是什么牌了"))
+        assertFalse("差的两段里有相同的字", swapped("固驰贴膜多少钱", "固驰贴车膜多少钱"))
+        assertFalse("折行残片:一边剩下的是空", swapped("我的车能贴吗什么车型都能贴吗", "什么车型都能贴吗"))
+        assertFalse("没有共用模板", swapped("固驰怎么样", "蓝晶灵BS7"))
+        assertFalse("差的两段里有同一个字(牌):换了个说法,不是换主语", swapped("固驰是什么牌子", "固驰是什么品牌"))
+        assertFalse("两段长短悬殊(2 对 4)多半是折行 / 昵称混入", swapped("我想问问固驰贴膜多少钱呀", "我想问问蓝晶灵牌贴膜多少钱呀"))
+        assertFalse("完全相同", swapped("固驰是什么牌子", "固驰是什么牌子"))
+    }
+
     // ── 时间窗与上传失败 ──
     @Test fun afterWindowExpires_sameTextCanBeAskedAgain() {
         val d = DanmakuDeduper(windowMs = 60_000)

@@ -91,8 +91,71 @@ class DanmakuDeduper(
             val minLen = minOf(a.length, b.length)
             // 贴边的条目只是半截:它是某条的一段(头或尾)就算同一条
             if (edge && minLen >= MIN_CHARS && (a.contains(b) || b.contains(a))) return true
+            if (numbersConflict(a, b) || subjectSwapped(a, b)) return false     // 差一个编号 / 换了主语:是两个问题,相似度再高也不能吞
             val threshold = if (minLen <= SHORT_LEN) SHORT_SIMILARITY else SIMILARITY
             return similarity(a, b) >= threshold
+        }
+
+        /** 共用的"问句模板"至少这么多字(头尾合计),才谈得上"同一个问法换了主语"。 */
+        private const val TEMPLATE_MIN = 4
+
+        /** 被换掉的那一段最多这么长(商品名 / 问法的后半句);更长的多半是折行或昵称混入。 */
+        private const val SWAP_MAX = 5
+
+        /**
+         * 套同一个问句模板、只换了主语:`固驰是什么牌子` / `蓝晶灵是什么牌子`(相似度 0.67)、`固驰是什么牌子` / `固驰是什么材质`(0.71)
+         * 都超过 0.6,按相似度会被当成同一条吞掉(2026-10-23)。判法:去掉共同的头和尾,剩下的两段各 2~5 个字、长度相差不超过 1、
+         * **一个相同的字都没有**(换主语是"词换词",长短相近;折行 / 昵称混入造成的差异一长一短,不算)。
+         * OCR 抖动改的是一两个字、且多半还会留下相同的字,不会被这条误判成两个问题;真错了两个字也只是多问一次(服务端有"同一回答冷却")。
+         * 入参是 [normalize] 之后的。和服务端 `vision_clean.subject_swapped` 同一口径。
+         */
+        fun subjectSwapped(a: String, b: String): Boolean {
+            val m = minOf(a.length, b.length)
+            var p = 0
+            while (p < m && a[p] == b[p]) p++
+            var s = 0
+            while (s < m - p && a[a.length - 1 - s] == b[b.length - 1 - s]) s++
+            if (p + s < TEMPLATE_MIN) return false
+            val ca = a.substring(p, a.length - s)
+            val cb = b.substring(p, b.length - s)
+            return ca.length in 2..SWAP_MAX && cb.length in 2..SWAP_MAX && kotlin.math.abs(ca.length - cb.length) <= 1 && ca.none { it in cb }
+        }
+
+        private val CN_DIGIT = mapOf('零' to 0, '一' to 1, '二' to 2, '两' to 2, '三' to 3, '四' to 4, '五' to 5, '六' to 6, '七' to 7, '八' to 8, '九' to 9)
+
+        /** 号码:阿拉伯数字,以及"X号""第X"里的中文数字(`介绍一下`的`一`后面是`下`,不算)。 */
+        private val NUMBER_TOKEN = Regex("[0-9]+|[一二两三四五六七八九十]+(?=号)|(?<=第)[一二两三四五六七八九十]+")
+
+        /** 中文数字 → 阿拉伯数字串(1~99:三→3、十二→12、二十→20);不认识的(三五)原样留着。 */
+        private fun cnNumber(s: String): String {
+            if (s.all { it in '0'..'9' }) return s.toBigInteger().toString()
+            val ten = s.indexOf('十')
+            if (ten >= 0) {
+                val head = s.substring(0, ten)
+                val tail = s.substring(ten + 1)
+                if (head.length > 1 || tail.length > 1) return s
+                val tens = if (head.isEmpty()) 1 else CN_DIGIT[head[0]] ?: return s
+                val ones = if (tail.isEmpty()) 0 else CN_DIGIT[tail[0]] ?: return s
+                return (tens * 10 + ones).toString()
+            }
+            return if (s.length == 1) CN_DIGIT[s[0]]?.toString() ?: s else s
+        }
+
+        /** 文字里的号码串(统一成阿拉伯数字):`2月岛出逃指南介绍十二号链接` → [2, 12]。入参是 [normalize] 之后的。 */
+        fun numberTokens(n: String): List<String> = NUMBER_TOKEN.findAll(n).map { cnNumber(it.value) }.toList()
+
+        /**
+         * 两边都带号码、号码不一样(`介绍一下1号链接` / `介绍一下2号链接`)是两个不同的问题,不能当成同一条吞掉。
+         * 宁可多问一次(OCR 偶尔认错数字,服务端还有"同一回答冷却"兜着),也别把另一条真提问当成重复丢了。
+         * 较短一边的号码串必须是较长一边的结尾才算没冲突:前面多出来的是行首粉丝等级徽章的数字(`2月岛出逃指南…1号链接`);
+         * 只一边有号码(OCR 丢了数字)不算冲突。和服务端 `vision_clean.numbers_conflict` 同一口径。
+         */
+        fun numbersConflict(a: String, b: String): Boolean {
+            val x = numberTokens(a)
+            val y = numberTokens(b)
+            if (x.isEmpty() || y.isEmpty() || x == y) return false
+            val (short, long) = if (x.size <= y.size) x to y else y to x
+            return long.takeLast(short.size) != short
         }
 
         /** 2×最长公共子序列 ÷ (两串长度之和),0~1。对"个别字认错/丢字"很宽容,对整体不同的两句话给低分。 */
