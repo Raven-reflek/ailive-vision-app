@@ -16,8 +16,10 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import java.util.concurrent.TimeUnit
 
 /**
- * 一帧的完整处理流水线:透视纠正 → 裁剪弹幕区域 → 温和预处理 → 识别文字 → 上传云端。
+ * 一帧的完整处理流水线:透视纠正 → 裁剪弹幕区域 → 温和预处理 → 识别文字 → 行合并 / 去重 → **入上传队列**。
  * 每次调用在CaptureService的单线程Analyzer回调里跑,天然串行,不需要额外加锁。
+ * 0.6.0 起(ADR-0041)这里**不再上传、不等网络**:挑出来的弹幕交给 [UploadEngine] 排队,由它的专用线程去传;
+ * 以前在这里同步上传(最坏 30 秒),期间一帧都不处理。
  *
  * 2026-09-23:识别这一步暂时改成本地(ML Kit)识别、传文字给 /api/vision/text——云端Ark视觉大模型
  * 账号那边卡在"模型不存在或无权限"没排查出来,先用本地OCR把真机联调这条路跑通。本地识别没有大模型
@@ -27,25 +29,31 @@ import java.util.concurrent.TimeUnit
 object FrameProcessor {
     private const val TAG = "FrameProcessor"
 
-    /** NEED_REBIND:服务端明确说这台设备的令牌已作废(401/410 + need_bind),调用方要停采集并提示重新扫码。 */
-    enum class Result { OK, RATE_LIMITED, ERROR, NEED_REBIND }
+    /** 这一帧有没有处理成功。0.6.0 起上传不在这里,限流 / 令牌失效不再经过识别这一路(见 [UploadEngine.Listener])。 */
+    enum class Result { OK, ERROR }
 
     private val recognizer by lazy { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
 
-    /** 最近上传过的弹幕(模糊判重)。只在 CaptureService 的单线程 Analyzer 里用;进程内常驻,窗口过期后自然清空。 */
+    /**
+     * 最近入过队的弹幕(模糊判重)。select / commit 在 CaptureService 的单线程 Analyzer 里用,
+     * [forget] 由上传线程 / 主线程调(去重器的方法自带锁);进程内常驻,窗口过期后自然清空。
+     */
     private val deduper = DanmakuDeduper()
 
     /** 读对过冒号的昵称(同一位观众后面冒号被 OCR 读丢时据此剥昵称)。同样只在 Analyzer 单线程里用,见 [NickMemory]。 */
     private val nicks = NickMemory()
 
-    /** 处理一帧并上传;成功/失败都不抛到调用方之外炸掉采集循环,内部吞掉异常只记日志。
-     * 返回值区分"服务端限流"和"其它失败",调用方(CaptureService)据此决定要不要退避——
-     * 以前不管什么原因失败都只是静默丢弃、下一帧照样按原节奏再打一次,遇到限流等于白打
-     * (2026-09-28 修的硬伤,详见 CaptureService.RATE_LIMIT_COOLDOWN_MS 处注释)。
+    /** 这些条目没能传出去(排队过期 / 被挤出队列 / 采集停了):撤销去重器的记账,它们如果还在屏幕上,下一帧能重新被选中。 */
+    fun forget(items: List<LineMerger.Item>) = deduper.forget(items)
+
+    /** 处理一帧:识别 → 合并 / 去重 → 把没见过的弹幕**入上传队列**就返回(不等网络);识别 / 入队出错都不抛到调用方之外炸掉采集循环,内部吞掉异常只记日志。
      *
-     * 识别出的内容(不管上传成不成功)都记进 RecognizedLog,首页拿它实时展示"摄像头认出了什么"——
+     * 入队时就在去重器里记账(commit):同一条弹幕要在屏幕上停留十几秒,每 2 秒拍一次,不能每次都再入队。
+     * 排队过期没传出去的,由 [UploadEngine.Listener] 那边调 [forget] 撤销。
+     *
+     * 识别出的内容记进 RecognizedLog(先标"排队中",上传线程传完 / 放弃后按 id 改状态),首页拿它实时展示"摄像头认出了什么"——
      * 装机/调试时用肉眼比对实际弹幕,比连电脑翻日志方便太多(2026-09-28 加)。 */
-    fun process(proxy: ImageProxy, calibration: Calibration, publishPreview: Boolean = false): Result {
+    fun process(proxy: ImageProxy, calibration: Calibration, uploader: UploadEngine, publishPreview: Boolean = false): Result {
         var diag: DiagFrame? = null            // 诊断包开着时,这一帧的识别细节(ADR-0038);缺省关,开着也只放内存
         val items: List<LineMerger.Item> = try {
             val f = prepare(proxy, calibration)
@@ -66,34 +74,18 @@ object FrameProcessor {
         }
         val now = System.currentTimeMillis()
         if (PreviewBus.active) PreviewBus.noteLines(items.map { it.text }, now)
-        // 同一条弹幕会在画面上停留很多帧、每帧的 OCR 错字还不一样:只上传没见过的,识别日志也只记这些
+        // 同一条弹幕会在画面上停留很多帧、每帧的 OCR 错字还不一样:只入队没见过的,识别日志也只记这些
         val fresh = if (items.isEmpty()) emptyList() else deduper.select(items, now)
         diag?.let { Diagnostics.record(it.withResult(items, fresh.map { i -> i.content })) }
         if (items.isEmpty()) return Result.OK   // 这一帧弹幕区域没识别到文字,不算失败,也没什么好上传的
         if (fresh.isEmpty()) return Result.OK
-        val texts = fresh.map { it.text }
         return try {
-            val resp = Api.visionText(fresh.map { it.content })   // 只传内容,"昵称:" 前缀去掉(昵称 OCR 不可靠,服务端也是固定占位昵称)
-            CaptureStats.noteUploadOk()   // 心跳:200 就算上传是通的(含下面 ignored:"source")
-            // 本店弹幕来源设为协议采集时,云端回 200 + ignored:"source":没被使用,但不是失败 —— 照常记账防重复,识别列表标"未使用"
-            val ignored = resp.optString("ignored") == "source"
-            DanmakuSourceState.noteUpload(ignored, resp.optString("danmaku_source"))
-            deduper.commit(fresh, now)
-            RecognizedLog.add(texts, uploaded = true, ignored = ignored)
+            val logId = RecognizedLog.add(fresh.map { it.text }, RecognizedLog.State.QUEUED)
+            deduper.commit(fresh, now)           // 入队就记账,别让它在屏幕上的这十几秒里每帧都再入队一次
+            uploader.enqueue(fresh, logId)       // 只传内容,"昵称:" 前缀去掉(昵称 OCR 不可靠,服务端也是固定占位昵称);怎么传、传没传成见 UploadEngine
             Result.OK
-        } catch (e: Api.ApiError) {
-            Log.w(TAG, "上传失败 HTTP ${e.code}:${e.message}")
-            CaptureStats.noteUploadFailed(e.code)   // 心跳:429 限流既不算成功也不算失败(CaptureStats 里忽略)
-            RecognizedLog.add(texts, uploaded = false)
-            when {
-                e.code == 429 -> Result.RATE_LIMITED
-                BindingGuard.classify(e) == BindingGuard.Verdict.TOKEN_INVALID -> Result.NEED_REBIND
-                else -> Result.ERROR
-            }
         } catch (e: Exception) {
-            Log.w(TAG, "上传失败:${e.message}")
-            CaptureStats.noteUploadFailed()
-            RecognizedLog.add(texts, uploaded = false)
+            Log.w(TAG, "入上传队列失败:${e.message}")
             Result.ERROR
         }
     }

@@ -308,17 +308,19 @@ class MainActivity : AppCompatActivity() {
         for (e in list) {
             val head = SpannableStringBuilder(fmt.format(Date(e.ts))).append(" · ")
             val statusStart = head.length
-            // 三种结果:已上传 / 上传成功但云端没使用(本店弹幕来源为协议采集,不是失败) / 上传失败
-            head.append(when {
-                e.ignored -> getString(R.string.source_ignored_tag)
-                e.uploaded -> "已上传"
-                else -> "上传失败,这几行已丢弃"
+            // 四种状态(0.6.0,识别与上传分开):排队中 / 已上传 / 上传成功但云端没使用(本店弹幕来源为协议采集,不是失败) / 排了 45 秒仍没传出去(或采集停了)而丢弃
+            head.append(when (e.state) {
+                RecognizedLog.State.QUEUED -> "排队中"
+                RecognizedLog.State.UPLOADED -> "已上传"
+                RecognizedLog.State.IGNORED -> getString(R.string.source_ignored_tag)
+                RecognizedLog.State.EXPIRED -> "超时未能上传,已丢弃"
             })
             head.setSpan(
-                ForegroundColorSpan(ContextCompat.getColor(this, when {
-                    e.ignored -> R.color.warn
-                    e.uploaded -> R.color.ok
-                    else -> R.color.bad
+                ForegroundColorSpan(ContextCompat.getColor(this, when (e.state) {
+                    RecognizedLog.State.QUEUED -> R.color.muted
+                    RecognizedLog.State.UPLOADED -> R.color.ok
+                    RecognizedLog.State.IGNORED -> R.color.warn
+                    RecognizedLog.State.EXPIRED -> R.color.bad
                 })),
                 statusStart, head.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
             )

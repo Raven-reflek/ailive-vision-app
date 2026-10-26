@@ -8,7 +8,8 @@ package com.luxofilms.vision
  * `查見火影葡手:主撫可以放那首是ey吗`、`查党火影群手:主進可以放那首動是gay吗`……),每个变体都被当成新弹幕、各问一次。
  * 这里按"字符层面的相似度"判重,吸收 OCR 抖动;同时省掉每分钟 40 次上传的限流额度。
  *
- * 状态只在内存里。线程:只在 CaptureService 的单线程 Analyzer 里用,不加锁。
+ * 状态只在内存里。线程(0.6.0 起):[select] / [commit] 在 CaptureService 的分析器线程,[forget] 在上传线程(条目过期 / 被挤出队列)
+ * 或主线程(采集停止),所以这三个方法都加了锁;每个方法都很短,不会拖慢分析器。
  */
 class DanmakuDeduper(
     private val windowMs: Long = DEFAULT_WINDOW_MS,
@@ -21,14 +22,16 @@ class DanmakuDeduper(
     private val pending = ArrayList<Pending>()
 
     /**
-     * 从这一帧合并出的弹幕里,挑出真正要上传的(顺序保持)。**不记账**——上传成功后调用 [commit],
-     * 上传失败的下一帧会重试,不会因为"已经试过"而丢掉。
+     * 从这一帧合并出的弹幕里,挑出真正要上传的(顺序保持)。**不记账**——挑出来后调用 [commit]。
+     * 0.6.0 起在**入队时**就 commit(同一条弹幕在屏幕上停留十几秒,不能每 2 秒再入队一次);
+     * 条目没传出去(排队过期 / 被挤出队列)时调用 [forget] 撤销,它如果还在屏幕上,下一帧能重新被选中。
      *
      * 贴着弹幕区边缘的条目(atEdge)很可能只露出一截,单独处理:
      * - 能和已见过的某条对上(含"是它的一段")→ 丢弃,这是已经问过的那条在滚出/滚入;
      * - 对不上 → 先不上传,同一条连续出现 [EDGE_RELEASE_SIGHTINGS] 帧(说明不是一晃而过的半截)才放行,
      *   避免"标定框恰好切在最新一条上"时它永远发不出去。
      */
+    @Synchronized
     fun select(items: List<LineMerger.Item>, now: Long): List<LineMerger.Item> {
         expire(now)
         val out = ArrayList<LineMerger.Item>()
@@ -52,7 +55,8 @@ class DanmakuDeduper(
         return out
     }
 
-    /** 这些条目已经成功上传,记入"已见过"。 */
+    /** 这些条目已经交出去(0.6.0 起是入队时,此前是上传成功后),记入"已见过"。 */
+    @Synchronized
     fun commit(items: List<LineMerger.Item>, now: Long) {
         for (item in items) {
             val n = normalize(item.content)
@@ -61,6 +65,19 @@ class DanmakuDeduper(
             if (hit != null) hit.at = now else seen.add(Seen(n, now))
         }
         while (seen.size > maxSeen) seen.removeAt(0)
+    }
+
+    /**
+     * 撤销这些条目的"已见过"记账:它们排队过期 / 被挤出队列 / 采集停了,**没有传出去**,不能让去重器一直当它们问过了——
+     * 弹幕还在屏幕上的话,下一帧 [select] 应当能重新选中它(重新入队、重新计 45 秒)。
+     * 只按归一化后**相同的文字**找记录([normalize] 后相等),不做模糊匹配:记录里存的是 [commit] 时的原文,
+     * 同一条弹幕的 OCR 变体不会进到队列里(select 已经把它们当重复挡掉了),不需要靠相似度去找。
+     */
+    @Synchronized
+    fun forget(items: List<LineMerger.Item>) {
+        if (items.isEmpty()) return
+        val norms = items.map { normalize(it.content) }.toHashSet()
+        seen.removeAll { it.norm in norms }
     }
 
     private fun expire(now: Long) {

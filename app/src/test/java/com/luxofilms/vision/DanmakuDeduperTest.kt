@@ -155,6 +155,75 @@ class DanmakuDeduperTest {
         assertTrue(d.upload(700, qs[4]).isEmpty())                                 // 最新的还在
     }
 
+    // ── 0.6.0:入队时就 commit,没传出去的(过期 / 被挤出队列)用 forget 撤销记账 ──
+    @Test fun committedAtEnqueue_suppressesTheSameItemWhileItStaysOnScreen() {
+        val d = DanmakuDeduper()
+        val e = item("甲:贴膜多少钱一平")
+        d.commit(d.select(listOf(e), 0), 0)
+        repeat(10) { i -> assertTrue("第 ${i + 1} 次再拍到同一条", d.select(listOf(e), (i + 1) * 2_000L).isEmpty()) }
+    }
+
+    @Test fun forget_makesAnExpiredItemSelectableAgain() {
+        val d = DanmakuDeduper()
+        val e = item("甲:贴膜多少钱一平")
+        val queued = d.select(listOf(e), 0)
+        d.commit(queued, 0)
+        assertTrue(d.select(listOf(e), 2_000).isEmpty())
+        d.forget(queued)                                                // 排队 45 秒没传出去,过期了
+        assertEquals("它还在屏幕上:下一帧能重新被选中", 1, d.select(listOf(e), 4_000).size)
+        d.commit(listOf(e), 4_000)                                      // 重新入队、重新记账
+        assertTrue(d.select(listOf(e), 6_000).isEmpty())
+    }
+
+    @Test fun forget_removesOnlyTheForgottenItems() {
+        val d = DanmakuDeduper()
+        val a = item("甲:贴膜多少钱一平方")
+        val b = item("乙:黑车贴车衣容易有胶纹吗")
+        d.commit(listOf(a, b), 0)
+        d.forget(listOf(a))
+        assertEquals(1, d.select(listOf(a), 2_000).size)
+        assertTrue("没被 forget 的仍算问过", d.select(listOf(b), 2_000).isEmpty())
+    }
+
+    @Test fun forget_matchesNormalizedText_soPunctuationAndSpacesDontMatter() {
+        val d = DanmakuDeduper()
+        d.commit(listOf(item("甲:贴膜 多少钱一平!")), 0)
+        d.forget(listOf(item("乙:贴膜多少钱一平")))                      // 昵称不同、标点空格不同,content 归一化后相同
+        assertEquals(1, d.select(listOf(item("甲:贴膜多少钱一平")), 2_000).size)
+    }
+
+    @Test fun forget_unknownEmptyOrAlreadyForgotten_isHarmless() {
+        val d = DanmakuDeduper()
+        d.forget(emptyList())
+        d.forget(listOf(item("甲:从没见过的一条弹幕")))
+        d.commit(listOf(item("乙:贴膜多少钱一平方")), 0)
+        d.forget(listOf(item("乙:贴膜多少钱一平方")))
+        d.forget(listOf(item("乙:贴膜多少钱一平方")))
+        assertEquals(1, d.select(listOf(item("乙:贴膜多少钱一平方")), 2_000).size)
+    }
+
+    @Test fun forget_doesNotTouchSimilarButDifferentRecords() {
+        val d = DanmakuDeduper()
+        d.commit(listOf(item("介绍一下1号链接")), 0)
+        d.forget(listOf(item("介绍一下2号链接")))                        // 只按相同文字找,不模糊
+        assertTrue("1 号那条还记着账", d.select(listOf(item("介绍一下1号链接")), 2_000).isEmpty())
+    }
+
+    @Test fun selectCommitForget_fromTwoThreads_neverCorruptState() {
+        // 分析器线程 select/commit、上传线程 forget(0.6.0):方法自带锁,不应抛 ConcurrentModificationException
+        val d = DanmakuDeduper()
+        val errors = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+        val texts = (0 until 40).map { item("甲$it:贴膜多少钱一平方米第${it}款") }
+        val analyzer = Thread {
+            try { for (i in 0 until 3000) { val f = d.select(listOf(texts[i % 40]), i * 10L); d.commit(f, i * 10L) } } catch (t: Throwable) { errors += t }
+        }
+        val uploader = Thread {
+            try { for (i in 0 until 3000) d.forget(listOf(texts[(i * 7) % 40])) } catch (t: Throwable) { errors += t }
+        }
+        analyzer.start(); uploader.start(); analyzer.join(); uploader.join()
+        assertTrue("线程间出错:$errors", errors.isEmpty())
+    }
+
     // ── 贴边(半截)条目 ──
     @Test fun edgeFragment_ofAlreadySeenItem_isDropped() {
         val d = DanmakuDeduper()

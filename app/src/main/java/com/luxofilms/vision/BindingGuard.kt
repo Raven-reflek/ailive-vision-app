@@ -8,7 +8,7 @@ import android.content.Context
  * 背景(2026-10 排查):总部在管理台"撤销设备 / 换新手机"后,云服务只会踢掉播放通道的 WebSocket;
  * 视觉采集 APP 只有 HTTP 上传、没有长连接,服务端无从通知。以前 APP 只看本地有没有存令牌(Prefs.bound),
  * 上传收到 401 也只记日志、标成"上传失败,这几行已丢弃",于是撤销后一直显示"已绑定"却什么都传不上去。
- * 现在有两处发现入口:① 上传收到 401/410 + need_bind(FrameProcessor → CaptureService);
+ * 现在有两处发现入口:① 上传收到 401/410 + need_bind(上传线程 UploadEngine → CaptureService);
  * ② 首页回到前台时主动探测(MainActivity.checkToken)。两处都走这里。
  */
 object BindingGuard {
