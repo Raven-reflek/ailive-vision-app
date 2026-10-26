@@ -53,6 +53,8 @@ object FrameProcessor {
             if (publishPreview) publishPreview(f.upright, if (PreviewBus.cropWanted) f.enhanced else null, calibration)
             val wantDiag = Diagnostics.enabled
             val rec = recognizeLocally(f.enhanced, wantDiag)
+            CaptureStats.noteOcrDone()                                  // 心跳:OCR 还在跑(超时 / 抛异常到不了这里)
+            if (rec.lines.isNotEmpty()) CaptureStats.noteText()         // 心跳:眼前有字(原始识别结果,不管后面是否被合并 / 去重)
             if (wantDiag) diag = try {
                 DiagFrame(System.currentTimeMillis(), f.enhanced.width, f.enhanced.height, Diagnostics.jpeg(f.enhanced), rec.detail)
             } catch (e: Throwable) { Log.w(TAG, "诊断帧记录失败:${e.message}"); null }       // 诊断是锦上添花,绝不能连累识别
@@ -72,6 +74,7 @@ object FrameProcessor {
         val texts = fresh.map { it.text }
         return try {
             val resp = Api.visionText(fresh.map { it.content })   // 只传内容,"昵称:" 前缀去掉(昵称 OCR 不可靠,服务端也是固定占位昵称)
+            CaptureStats.noteUploadOk()   // 心跳:200 就算上传是通的(含下面 ignored:"source")
             // 本店弹幕来源设为协议采集时,云端回 200 + ignored:"source":没被使用,但不是失败 —— 照常记账防重复,识别列表标"未使用"
             val ignored = resp.optString("ignored") == "source"
             DanmakuSourceState.noteUpload(ignored, resp.optString("danmaku_source"))
@@ -80,6 +83,7 @@ object FrameProcessor {
             Result.OK
         } catch (e: Api.ApiError) {
             Log.w(TAG, "上传失败 HTTP ${e.code}:${e.message}")
+            CaptureStats.noteUploadFailed(e.code)   // 心跳:429 限流既不算成功也不算失败(CaptureStats 里忽略)
             RecognizedLog.add(texts, uploaded = false)
             when {
                 e.code == 429 -> Result.RATE_LIMITED
@@ -88,6 +92,7 @@ object FrameProcessor {
             }
         } catch (e: Exception) {
             Log.w(TAG, "上传失败:${e.message}")
+            CaptureStats.noteUploadFailed()
             RecognizedLog.add(texts, uploaded = false)
             Result.ERROR
         }

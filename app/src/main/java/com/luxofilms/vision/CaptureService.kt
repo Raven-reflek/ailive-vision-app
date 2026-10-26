@@ -4,9 +4,14 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -15,6 +20,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -37,6 +45,11 @@ class CaptureService : LifecycleService() {
     private var stalledRounds = 0                       // 看门狗连续发现"没有画面"的轮数
     private var stallAlerted = false
 
+    // 心跳(契约 04「视觉采集心跳」):单独一个线程,**不能**和 io(分析器线程)共用——分析器卡在 OCR / 上传时,
+    // 心跳必须照发,卡住这件事正是要靠它的 frame_ago / ocr_ago 告诉云端。线程只由主线程创建 / 销毁,心跳任务自己在里面排下一次。
+    private var hbExec: ScheduledExecutorService? = null
+    @Volatile private var hbStopped = false             // 令牌失效 / 服务销毁:不再排下一次心跳
+
     override fun onCreate() {
         super.onCreate()
         try {
@@ -45,6 +58,7 @@ class CaptureService : LifecycleService() {
             )
             foregroundOk = true
             running = true
+            CaptureStats.reset()                // 采集服务真正起来了:心跳的计数与 uptime 从这里算起
             Alerts.clearStartFailure(this)
         } catch (e: Exception) {
             // 起不来有两类原因,告警要分开说(CameraPermission.startFailure):
@@ -90,6 +104,7 @@ class CaptureService : LifecycleService() {
         startCamera()
         main.removeCallbacks(watchdog)
         main.postDelayed(watchdog, WATCHDOG_MS)
+        startHeartbeat()
     }
 
     /** 看门狗:摄像头被别的应用占用、被系统回收、开机后台启动拿不到相机……这些情况下 CameraX 不一定报错,
@@ -143,6 +158,7 @@ class CaptureService : LifecycleService() {
                 val cal = calibration
                 val now = System.currentTimeMillis()
                 lastFrameAt = now                       // 不管后面是否丢帧,"摄像头在出帧"本身就是看门狗要的信号
+                CaptureStats.noteFrame()                // 同一个信号也给心跳(单调时钟,不受手机对时影响)
                 if (cal == null || bindingInvalidated) { proxy.close(); return@setAnalyzer }
                 val minIntervalMs = (1000f / fps).toLong()
                 // 这一帧该做什么由 FrameGate 决定:OCR 的节奏和限流冷却与以前完全一致;
@@ -196,6 +212,67 @@ class CaptureService : LifecycleService() {
         }, androidx.core.content.ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * 启动心跳(幂等)。refreshAndBind() 每次都会走到这里:已经在发就不动它——重新标定不该把发送节奏打回 5 秒,也不该多起线程。
+     * 第一次心跳在启动约 5 秒后(留给摄像头出第一帧)。之后每次发完再按 [HeartbeatSchedule] 排下一次。
+     */
+    private fun startHeartbeat() {
+        if (hbExec?.isShutdown == false) return
+        hbStopped = false
+        val exec = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "vision-heartbeat").apply { isDaemon = true } }
+        hbExec = exec
+        scheduleBeat(exec, HeartbeatSchedule(), HeartbeatSchedule.INITIAL_DELAY_S)
+    }
+
+    private fun scheduleBeat(exec: ScheduledExecutorService, schedule: HeartbeatSchedule, delayS: Int) {
+        if (hbStopped) return
+        try {
+            exec.schedule(Runnable { beat(exec, schedule) }, delayS.toLong(), TimeUnit.SECONDS)
+        } catch (e: RejectedExecutionException) {
+            // 服务正在销毁,线程池已关
+        }
+    }
+
+    /** 发一次心跳并排好下一次。在心跳线程里跑,**不能让异常逃出去**(逃出去会让后续所有心跳悄悄停掉)。 */
+    private fun beat(exec: ScheduledExecutorService, schedule: HeartbeatSchedule) {
+        if (hbStopped || bindingInvalidated) return      // 服务在销毁,或上传路径已发现令牌作废、正在善后:不再发,也不再排
+        var next: Int?
+        try {
+            val resp = Api.heartbeat(buildHeartbeat(this, Heartbeat.STATE_CAPTURING).toJson())
+            next = schedule.onSuccess(resp.optInt("interval", 0))    // 以服务端建议的间隔为准(缺省 60 秒,夹到 30~300)
+        } catch (e: Api.ApiError) {
+            val verdict = BindingGuard.classify(e)
+            Log.w(TAG, "心跳失败 HTTP ${e.code}:${e.message}")
+            next = schedule.onError(e.code, verdict)                 // 令牌失效 → null(不重试);门店停用 → 照常节奏、不解绑;404 → 10 分钟;其余退避
+            if (verdict == BindingGuard.Verdict.TOKEN_INVALID) {
+                // 与上传路径一致:令牌已作废(总部撤销 / 换新手机 / 门店删除)→ 先挡住后面的帧,再到主线程清绑定(保留标定)+ 停服务 + 告警。
+                // 采集空闲、没有上传的手机,靠这里也能在约 1 分钟内发现
+                bindingInvalidated = true
+                main.post {
+                    BindingGuard.clearBindingAndStop(this@CaptureService, BindingGuard.NOTICE_INVALID, alert = true)
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "心跳失败:${e.message}")                      // 断网、超时(callTimeout 8 秒)、被 shutdownNow 打断等
+            next = schedule.onFailure()
+        }
+        if (next != null) scheduleBeat(exec, schedule, next)
+    }
+
+    /** 店员主动停止采集时,尽力补发一次 state=stopped,让云端说"已停止采集"而不是几分钟后报"失联"。 */
+    private fun sendStoppedBeat() {
+        val app = applicationContext
+        val stats = CaptureStats.snapshot()      // 此刻的计数先取好:服务马上重新启动的话 CaptureStats 会被清零
+        // 单独起一个一次性线程:onDestroy 在主线程,不能等网络;请求自带 8 秒总超时,发不出去就算了
+        Thread({
+            try {
+                Api.heartbeat(buildHeartbeat(app, Heartbeat.STATE_STOPPED, stats).toJson())
+            } catch (e: Throwable) {
+                Log.w(TAG, "停止心跳没发出去:${e.message}")
+            }
+        }, "vision-heartbeat-stop").apply { isDaemon = true }.start()
+    }
+
     private fun buildNotification(text: String): Notification {
         val openIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -218,10 +295,18 @@ class CaptureService : LifecycleService() {
         PreviewBus.clear()                  // 采集停了,预览页不该继续显示旧画面
         cameraProvider?.unbindAll()
         io.shutdownNow()
+        val hadHeartbeat = hbExec != null
+        hbStopped = true
+        hbExec?.shutdownNow()
+        hbExec = null
+        // 只有"店员主动停止"才补发 stopped(CaptureService.stop 先把 captureWanted 置 false 再停服务)。
+        // 系统回收 / 相机权限被撤(captureWanted 仍为 true)不发——云端靠"失联"判断;令牌作废 / 已解绑(bindingInvalidated、!bound)更没得发
+        if (hadHeartbeat && !bindingInvalidated && !Prefs.captureWanted && Prefs.bound) sendStoppedBeat()
         super.onDestroy()
     }
 
     companion object {
+        private const val TAG = "CaptureService"
         private const val NOTIF_ID = 2001
         private const val RATE_LIMIT_COOLDOWN_MS = 65_000L   // 服务端限流窗口是 60 秒滑动窗口,多留 5 秒余量
         private const val WATCHDOG_MS = 15_000L
@@ -250,6 +335,44 @@ class CaptureService : LifecycleService() {
 
         private fun launch(context: Context) {
             context.startForegroundService(Intent(context, CaptureService::class.java))
+        }
+
+        /**
+         * 读设备状态(电量、充电、网络、相机权限)并和采集计数快照一起组装成心跳载荷。**不抛异常**:
+         * 电量 / 网络读不到就留空(载荷里省略),不能因为这个让心跳发不出去。判定规则都在纯逻辑 [Heartbeat] 里。
+         */
+        private fun buildHeartbeat(ctx: Context, state: String, stats: CaptureStats.Snapshot = CaptureStats.snapshot()): HeartbeatPayload {
+            var battery: Int? = null
+            var charging: Boolean? = null
+            try {
+                // 粘性广播:receiver 传 null 不会注册任何接收器,直接返回系统缓存的最近一次电量状态
+                val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                if (i != null) {
+                    battery = Heartbeat.batteryPercent(
+                        i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1), i.getIntExtra(BatteryManager.EXTRA_SCALE, -1),
+                    )
+                    charging = Heartbeat.isCharging(
+                        i.getIntExtra(BatteryManager.EXTRA_STATUS, -1), i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0),
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "读电量失败:${e.message}")
+            }
+            val net: String? = try {
+                val cm = ctx.getSystemService(ConnectivityManager::class.java)
+                val network = cm?.activeNetwork
+                val caps = if (cm != null && network != null) cm.getNetworkCapabilities(network) else null
+                Heartbeat.netKind(
+                    connected = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
+                    wifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true,
+                    cellular = caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true,
+                    ethernet = caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true,
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "读网络状态失败:${e.message}")
+                null
+            }
+            return Heartbeat.build(state, BuildConfig.VERSION_CODE, battery, charging, net, CameraPermission.has(ctx), stats)
         }
     }
 }

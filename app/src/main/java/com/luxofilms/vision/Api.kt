@@ -26,6 +26,9 @@ object Api {
     /** 解除绑定这类"尽力而为"的请求:整个调用 5 秒内必须结束 */
     private val quick: OkHttpClient = http.newBuilder().callTimeout(5, TimeUnit.SECONDS).build()
 
+    /** 心跳:整个调用 8 秒内必须结束。心跳线程是单独的,但慢网络上也不该让一次心跳压过下一次(间隔 ≥ 30 秒) */
+    private val heartbeatClient: OkHttpClient = http.newBuilder().callTimeout(8, TimeUnit.SECONDS).build()
+
     private val JSON ="application/json; charset=utf-8".toMediaType()
 
     class ApiError(val code: Int, msg: String, val body: JSONObject = JSONObject()) : Exception(msg) {
@@ -64,6 +67,11 @@ object Api {
      * 失败(断网、服务端还没上线这个接口、令牌早已作废)都不影响本机解绑,所以调用方要吞掉异常。
      * 用短超时:店员点完按钮不该为一个弱网请求等十几秒。 */
     fun unbind(): JSONObject = call(req("/api/app/unbind", JSONObject()), quick)
+
+    /** 采集手机心跳(契约 04「视觉采集心跳」):每 60 秒一次,不依赖有没有新弹幕,载荷见 [Heartbeat]。
+     * 回包 {ok, interval},interval 是服务端建议的发送间隔(秒)。错误语义同 [visionText]:401/410+need_bind 令牌失效、
+     * 403+store_disabled 只提示、404 = 老云服务没有这个接口,由调用方(CaptureService)按 [HeartbeatSchedule] 处理。 */
+    fun heartbeat(payload: JSONObject): JSONObject = call(req("/api/vision/heartbeat", payload), heartbeatClient)
 
     /** 扫码绑定:一次性绑定码 → 长效设备 token。二维码内容 {server, store, code} */
     fun bind(server: String, store: String, code: String): JSONObject {
