@@ -27,7 +27,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 持续摄像头采集的前台服务:绑定 ImageAnalysis,按 Prefs.sampleFps 节流取帧,
- * 每一帧交给 FrameProcessor 处理(透视纠正+裁剪+预处理+编码+上传云端)。
+ * 每一帧交给 FrameProcessor 处理(透视纠正+裁剪+预处理+识别+入上传队列)。
+ * 上传在专用的上传线程里([UploadEngine]),分析器线程不等网络(0.6.0,ADR-0041)。
  * 不绑定 Preview,标定完成后可以完全无界面运行。
  */
 class CaptureService : LifecycleService() {
@@ -35,7 +36,6 @@ class CaptureService : LifecycleService() {
     private val io = Executors.newSingleThreadExecutor()
     private val lastProcessedAt = AtomicLong(0L)
     @Volatile private var lastPreviewAt = 0L        // 上次出预览图的时刻(只在分析器线程读写)
-    private val rateLimitedUntil = AtomicLong(0L)   // 服务端返回 429 后,在这个时刻之前不再尝试上传
     private var cameraProvider: ProcessCameraProvider? = null
     @Volatile private var calibration: Calibration? = null
     @Volatile private var bindingInvalidated = false    // 已发现令牌作废:之后的帧直接丢弃,不再识别/上传
@@ -49,6 +49,45 @@ class CaptureService : LifecycleService() {
     // 心跳必须照发,卡住这件事正是要靠它的 frame_ago / ocr_ago 告诉云端。线程只由主线程创建 / 销毁,心跳任务自己在里面排下一次。
     private var hbExec: ScheduledExecutorService? = null
     @Volatile private var hbStopped = false             // 令牌失效 / 服务销毁:不再排下一次心跳
+
+    // 上传引擎(0.6.0,ADR-0041):在服务真正起来(前台通知已显示)后创建,onDestroy 里停掉并丢弃队列(队列只在内存里,停了就不留)。
+    // 分析器线程读它,主线程写,所以是 @Volatile;没起来 / 已销毁时为 null,分析器据此丢帧。
+    @Volatile private var uploader: UploadEngine? = null
+
+    /**
+     * 上传引擎的结果回调。uploaded / expired / tokenInvalid 在上传线程,dropped 在分析器线程(入队时挤掉最旧的),
+     * 这里碰的状态(RecognizedLog、去重器、DanmakuSourceState)都是线程安全的。
+     */
+    private val uploadListener = object : UploadEngine.Listener {
+        override fun uploaded(entries: List<UploadQueue.Entry>, ignored: Boolean, danmakuSource: String?) {
+            // 本店弹幕来源设为协议采集时,云端回 200 + ignored:"source":没被使用,但不是失败 —— 识别列表标"未使用"。
+            // (心跳的上传计数在 ApiUploadSender 里记,口径不变:200 含 ignored 算成功)
+            DanmakuSourceState.noteUpload(ignored, danmakuSource)
+            val state = if (ignored) RecognizedLog.State.IGNORED else RecognizedLog.State.UPLOADED
+            entries.map { it.tag }.distinct().forEach { RecognizedLog.update(it, state) }
+        }
+
+        override fun expired(entries: List<UploadQueue.Entry>) = giveUp(entries)
+
+        override fun dropped(entries: List<UploadQueue.Entry>) = giveUp(entries)
+
+        override fun tokenInvalid(cleared: List<UploadQueue.Entry>) {
+            // 令牌已被服务端作废:重试没有意义,队列已清空。先置标志挡住后面还在排队的帧,
+            // 再到主线程清绑定(保留标定)+停服务+发告警(clearBindingAndStop 幂等)——与此前上传收到 401 的处理一样。
+            giveUp(cleared)
+            bindingInvalidated = true
+            main.post {
+                BindingGuard.clearBindingAndStop(this@CaptureService, BindingGuard.NOTICE_INVALID, alert = true)
+            }
+        }
+    }
+
+    /** 这些条目没能传出去(过期 / 被挤出 / 清空):首页标"超时未能上传,已丢弃",并让去重器忘掉它们,还在屏幕上的下一帧能重新入队。 */
+    private fun giveUp(entries: List<UploadQueue.Entry>) {
+        if (entries.isEmpty()) return
+        FrameProcessor.forget(entries.map { it.item })
+        entries.map { it.tag }.distinct().forEach { RecognizedLog.update(it, RecognizedLog.State.EXPIRED) }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -69,6 +108,8 @@ class CaptureService : LifecycleService() {
             stopSelf()
             return
         }
+        // 服务真正起来了(前台通知已显示):建上传引擎、起上传线程。起不来的服务不建,免得留下没人停的线程
+        uploader = UploadEngine(ApiUploadSender, uploadListener, log = { Log.w(TAG, it) }).also { it.start() }
         // 真正的"加载标定+绑定摄像头"统一放到 onStartCommand() 里做(见 refreshAndBind()),
         // 不在 onCreate 单独写一份——否则"服务已经在跑,只是想让它重新读一次标定/重新抓一次摄像头"这个
         // 场景没有入口:startForegroundService() 对已存在的服务只会触发 onStartCommand,不会重新走 onCreate。
@@ -156,48 +197,33 @@ class CaptureService : LifecycleService() {
                 .build()
             analysis.setAnalyzer(io) { proxy ->
                 val cal = calibration
+                val up = uploader
                 val now = System.currentTimeMillis()
                 lastFrameAt = now                       // 不管后面是否丢帧,"摄像头在出帧"本身就是看门狗要的信号
                 CaptureStats.noteFrame()                // 同一个信号也给心跳(单调时钟,不受手机对时影响)
-                if (cal == null || bindingInvalidated) { proxy.close(); return@setAnalyzer }
+                if (cal == null || up == null || bindingInvalidated) { proxy.close(); return@setAnalyzer }
                 val minIntervalMs = (1000f / fps).toLong()
-                // 这一帧该做什么由 FrameGate 决定:OCR 的节奏和限流冷却与以前完全一致;
+                // 这一帧该做什么由 FrameGate 决定:OCR 的节奏只看采样间隔(0.6.0 起没有 429 冷却:被限流只延后上传,识别照常);
                 // 另外,"采集预览"页打开期间按更高频率出预览图(预览页自己不开摄像头,只读这里发布的图)
                 val decision = FrameGate.decide(
                     now = now, lastOcrAt = lastProcessedAt.get(), ocrIntervalMs = minIntervalMs,
-                    rateLimitedUntil = rateLimitedUntil.get(),
                     previewActive = PreviewBus.active, lastPreviewAt = lastPreviewAt,
                 )
                 if (decision.skip) {
-                    proxy.close()   // 还没到下一次采样时间,或者刚被服务端限流、还在冷却期,且没人在看预览:丢帧
+                    proxy.close()   // 还没到下一次采样时间,且没人在看预览:丢帧
                                      // (STRATEGY_KEEP_ONLY_LATEST 保证不会堆积,不是排队重试)
                     return@setAnalyzer
                 }
                 if (decision.preview) lastPreviewAt = now
                 if (!decision.ocr) {
-                    // 只出预览图,不识别、不上传,也不动 OCR 的计时
+                    // 只出预览图,不识别、不入队,也不动 OCR 的计时
                     try { FrameProcessor.preview(proxy, cal) } finally { proxy.close() }
                     return@setAnalyzer
                 }
                 lastProcessedAt.set(now)
                 try {
-                    when (FrameProcessor.process(proxy, cal, publishPreview = decision.preview)) {
-                        FrameProcessor.Result.RATE_LIMITED -> {
-                            // 服务端 40次/60秒 的窗口按设备算,不是按这一帧算:被拒一次,后面短时间内再试
-                            // 大概率还是被拒,干脆整个冷却窗口内都不再打(2026-09-28 修的硬伤:以前默认
-                            // 采样频率本身就超过服务端限流,约三分之一请求被拒且没有任何退避,白白浪费请求)。
-                            rateLimitedUntil.set(now + RATE_LIMIT_COOLDOWN_MS)
-                        }
-                        FrameProcessor.Result.NEED_REBIND -> {
-                            // 令牌已被服务端作废:重试没有意义。先置标志挡住后面还在排队的帧,
-                            // 再到主线程清绑定(保留标定)+停服务+发告警(clearBindingAndStop 幂等)。
-                            bindingInvalidated = true
-                            main.post {
-                                BindingGuard.clearBindingAndStop(this@CaptureService, BindingGuard.NOTICE_INVALID, alert = true)
-                            }
-                        }
-                        else -> Unit
-                    }
+                    // 识别后只入上传队列、立刻返回;限流、失败重试、令牌失效都在上传线程那边处理(uploadListener)
+                    FrameProcessor.process(proxy, cal, up, publishPreview = decision.preview)
                 } finally {
                     proxy.close()
                 }
@@ -295,6 +321,9 @@ class CaptureService : LifecycleService() {
         PreviewBus.clear()                  // 采集停了,预览页不该继续显示旧画面
         cameraProvider?.unbindAll()
         io.shutdownNow()
+        // 停上传线程、丢掉队列里没传出去的(队列只在内存里,停了就不留):首页标"超时未能上传,已丢弃",去重器忘掉它们
+        uploader?.stop()?.let { giveUp(it) }
+        uploader = null
         val hadHeartbeat = hbExec != null
         hbStopped = true
         hbExec?.shutdownNow()
@@ -308,7 +337,6 @@ class CaptureService : LifecycleService() {
     companion object {
         private const val TAG = "CaptureService"
         private const val NOTIF_ID = 2001
-        private const val RATE_LIMIT_COOLDOWN_MS = 65_000L   // 服务端限流窗口是 60 秒滑动窗口,多留 5 秒余量
         private const val WATCHDOG_MS = 15_000L
         private const val STALL_MS = 45_000L
 

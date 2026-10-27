@@ -6,17 +6,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 每帧做什么的判定。最重要的保证:**预览页开不开,都不改变 OCR 的节奏、也不绕过 429 冷却**
- * (识别/上传频率超过服务端 40 次/60 秒会被拒)。
+ * 每帧做什么的判定。最重要的保证:**预览页开不开,都不改变 OCR 的节奏**。
+ * 0.6.0 起(ADR-0041)不再有"429 冷却":上传在独立线程里排队,被限流只延后上传,识别照常,所以这里也不再认识限流。
  */
 class FrameGateTest {
     private val ocrInterval = 2000L          // 默认 0.5 帧/秒
     private val t0 = 1_000_000L
 
     private fun decide(
-        now: Long, lastOcr: Long = 0L, rateLimitedUntil: Long = 0L,
+        now: Long, lastOcr: Long = 0L,
         previewActive: Boolean = false, lastPreview: Long = 0L,
-    ) = FrameGate.decide(now, lastOcr, ocrInterval, rateLimitedUntil, previewActive, lastPreview)
+    ) = FrameGate.decide(now, lastOcr, ocrInterval, previewActive, lastPreview)
 
     // ── 预览关闭:与改动前完全一致 ──
     @Test fun previewOff_dueOcr_runsOcrOnly() {
@@ -29,14 +29,10 @@ class FrameGateTest {
         assertTrue(d.skip)
     }
 
-    @Test fun previewOff_rateLimited_skips_evenIfOcrIntervalPassed() {
-        val d = decide(now = t0, lastOcr = t0 - 10_000, rateLimitedUntil = t0 + 1)
-        assertTrue(d.skip)
-    }
-
-    @Test fun previewOff_cooldownEndsExactlyNow_runsOcr() {
-        // 原条件是 now < rateLimitedUntil 才丢,等于就放行
-        assertTrue(decide(now = t0, lastOcr = t0 - 10_000, rateLimitedUntil = t0).ocr)
+    @Test fun previewOff_longSinceLastOcr_runsOcr_noCooldownAnymore() {
+        // 0.6.0 前,收到 429 后 65 秒内这里一律丢帧;现在 OCR 只看采样间隔
+        val d = decide(now = t0, lastOcr = t0 - 10_000)
+        assertTrue(d.ocr); assertFalse(d.skip)
     }
 
     // ── 预览打开:OCR 节奏不变,另外多出预览帧 ──
@@ -55,13 +51,6 @@ class FrameGateTest {
         }
         assertEquals(ocrCountOff, ocrCountOn)
         assertEquals("20 秒内 0.5 帧/秒约 10 次", 11, ocrCountOn)   // t=0(首帧)+每 2 秒一次,含端点
-    }
-
-    @Test fun previewOn_rateLimited_stillNoOcr_butPreviewContinues() {
-        val d = decide(now = t0, lastOcr = t0 - 10_000, rateLimitedUntil = t0 + 30_000, previewActive = true, lastPreview = 0L)
-        assertFalse("限流冷却期不能做 OCR", d.ocr)
-        assertTrue("预览不打服务端,不受限流影响", d.preview)
-        assertFalse(d.skip)
     }
 
     @Test fun previewOn_betweenOcrTicks_previewOnly() {

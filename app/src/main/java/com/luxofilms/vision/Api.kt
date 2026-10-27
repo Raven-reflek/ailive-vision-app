@@ -29,11 +29,25 @@ object Api {
     /** 心跳:整个调用 8 秒内必须结束。心跳线程是单独的,但慢网络上也不该让一次心跳压过下一次(间隔 ≥ 30 秒) */
     private val heartbeatClient: OkHttpClient = http.newBuilder().callTimeout(8, TimeUnit.SECONDS).build()
 
+    /**
+     * 文字上传:整个调用 15 秒内必须结束(契约 04「耗时预算」,此前连接 10 + 读取 20 = 最坏 30 秒)。
+     * 连接 / 读取各自的超时都压在 15 秒以下;上传在专用线程里,但一次请求拖太久会连累后面的批次和它们的 45 秒时效。
+     */
+    private val upload: OkHttpClient = http.newBuilder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     private val JSON ="application/json; charset=utf-8".toMediaType()
 
-    class ApiError(val code: Int, msg: String, val body: JSONObject = JSONObject()) : Exception(msg) {
+    /** retryAfterHeader:响应头 `Retry-After` 的秒数(只认整数秒;没有 / 是日期格式 / 解析不了为 null)。 */
+    class ApiError(val code: Int, msg: String, val body: JSONObject = JSONObject(), private val retryAfterHeader: Int? = null) : Exception(msg) {
         val storeDisabled: Boolean get() = body.optBoolean("store_disabled")
         val needBind: Boolean get() = body.optBoolean("need_bind")
+
+        /** 429 时云端建议的等待秒数:优先 `Retry-After` 响应头,没有再看响应体的 `retry_after`;都没有或不是正整数为 null。 */
+        val retryAfterSec: Int? get() = retryAfterHeader?.takeIf { it > 0 } ?: body.optInt("retry_after", 0).takeIf { it > 0 }
     }
 
     private fun req(path: String, body: JSONObject? = null, server: String = Prefs.server, token: String = Prefs.token): Request {
@@ -48,7 +62,9 @@ object Api {
         client.newCall(r).execute().use { resp ->
             val text = resp.body?.string() ?: ""
             val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
-            if (!resp.isSuccessful) throw ApiError(resp.code, json.optString("error", "HTTP ${resp.code}"), json)
+            if (!resp.isSuccessful) {
+                throw ApiError(resp.code, json.optString("error", "HTTP ${resp.code}"), json, resp.header("Retry-After")?.trim()?.toIntOrNull())
+            }
             return json
         }
     }
@@ -103,10 +119,13 @@ object Api {
      * 与其自己编一个固定假昵称,不如让服务端按"没昵称"处理——vision_ocr._clean_items() 会兜底填
      * 一个能被识别成匿名观众的占位符(2026-09-28 改的;之前客户端固定写死"直播间观众",这个词不在
      * 匿名名单里,会被当成一个真实昵称,导致每句回答都以同一句"直播间观众老板,"开头)。
+     *
+     * batchId(0.6.0,契约 04「幂等重试」):这一批的 id,**同一批重试时沿用同一个**,云端据此不重复处理(重放回 200 + replayed:true)。
+     * 旧云服务不认识这个字段,忽略即可。调用方是上传线程([UploadEngine]),整个调用有 15 秒总超时。
      */
-    fun visionText(lines: List<String>): JSONObject {
+    fun visionText(lines: List<String>, batchId: String): JSONObject {
         val items = JSONArray()
         for (line in lines) items.put(JSONObject().put("content", line))
-        return call(req("/api/vision/text", JSONObject().put("items", items)))
+        return call(req("/api/vision/text", JSONObject().put("items", items).put("batch_id", batchId)), upload)
     }
 }
