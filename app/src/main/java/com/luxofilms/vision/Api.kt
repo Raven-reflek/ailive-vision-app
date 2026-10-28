@@ -20,9 +20,6 @@ object Api {
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    /** 上传一帧图片:服务端要调Ark视觉大模型识别,比普通接口慢,读超时放宽 */
-    private val slow: OkHttpClient = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
-
     /** 解除绑定这类"尽力而为"的请求:整个调用 5 秒内必须结束 */
     private val quick: OkHttpClient = http.newBuilder().callTimeout(5, TimeUnit.SECONDS).build()
 
@@ -103,13 +100,26 @@ object Api {
     }
 
     /**
-     * 上传一帧裁剪好的弹幕区域图片(JPEG字节)。服务端负责调Ark视觉大模型识别、清洗、触发AI回答——
-     * 客户端不接触识别结果,只管拍照上传(见方案文档"1.3 识别引擎"一节的安全考虑:Ark的Key不能进APK)。
+     * 上传一张裁剪好的评论区截图(JPEG 字节),由云端视觉大模型认字(0.7.0,门店开了云端识别时才用;Key 只在服务端)。
+     * items:本机 ML Kit 认出的新行(带读得准的昵称),云端模型失败时用它兜底。回包同 [visionText],另带 `cloud`(cloud / fallback / off)。
+     * 云端要等大模型(约 3~6 秒)再加答问收件箱的等待,用单独的 25 秒总超时。
      */
-    fun visionFrame(jpegBytes: ByteArray): JSONObject {
+    fun visionFrame(jpegBytes: ByteArray, items: List<LineMerger.Item> = emptyList()): JSONObject {
         val b64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
-        return call(req("/api/vision/frame", JSONObject().put("image_base64", b64)), slow)
+        val arr = JSONArray()
+        for (it in items) {
+            val o = JSONObject().put("content", it.content)
+            it.nick?.takeIf { n -> n.isNotBlank() }?.let { n -> o.put("nickname", n) }
+            arr.put(o)
+        }
+        return call(req("/api/vision/frame", JSONObject().put("image_base64", b64).put("items", arr)), frameClient)
     }
+
+    private val frameClient: OkHttpClient = http.newBuilder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(22, TimeUnit.SECONDS)
+        .callTimeout(25, TimeUnit.SECONDS)
+        .build()
 
     /**
      * 本地OCR兜底通道(2026-09-23):Ark视觉大模型账号权限问题排查未解时,设备本地(ML Kit)识别出的

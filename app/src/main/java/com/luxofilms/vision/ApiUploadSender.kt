@@ -27,10 +27,13 @@ object ApiUploadSender : UploadEngine.Sender {
         return result
     }
 
-    fun fromResponse(resp: JSONObject): SendResult.Ok = SendResult.Ok(
-        ignored = resp.optString("ignored") == "source",
-        danmakuSource = resp.optString("danmaku_source").ifEmpty { null },
-    )
+    fun fromResponse(resp: JSONObject): SendResult.Ok {
+        CloudOcrState.noteResponse(resp)                 // 0.7.0:云端说这家店开没开云端识别(没带这个字段 = 老云服务,不动)
+        return SendResult.Ok(
+            ignored = resp.optString("ignored") == "source",
+            danmakuSource = resp.optString("danmaku_source").ifEmpty { null },
+        )
+    }
 
     fun fromError(e: Api.ApiError): SendResult = when {
         e.code == 429 -> SendResult.RateLimited(e.retryAfterSec)

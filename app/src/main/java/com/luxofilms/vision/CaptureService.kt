@@ -82,6 +82,34 @@ class CaptureService : LifecycleService() {
         }
     }
 
+    // 云端识别的截图发送线程(0.7.0):门店开着云端识别时,有新弹幕就传评论区截图;发失败把本机认出的行交回文字上传通道
+    @Volatile private var cloudSender: CloudFrameSender? = null
+
+    private fun buildCloudSender() = CloudFrameSender(
+        slot = FrameSlot { System.currentTimeMillis() },
+        send = { job -> Api.visionFrame(job.jpeg, job.items) },
+        onSent = { job, resp ->
+            CloudOcrState.noteResponse(resp)
+            val ignored = resp.optString("ignored") == "source"
+            DanmakuSourceState.noteUpload(ignored, resp.optString("danmaku_source").ifEmpty { null })
+            CaptureStats.noteUploadOk()
+            val state = if (ignored) RecognizedLog.State.IGNORED else RecognizedLog.State.UPLOADED
+            job.tags.forEach { RecognizedLog.update(it, state) }
+        },
+        fallback = { job ->
+            val up = uploader
+            if (up == null) giveUpItems(job.entries)
+            else job.entries.groupBy({ it.second }, { it.first }).forEach { (tag, items) -> up.enqueue(items, tag) }
+        },
+        log = { Log.w(TAG, it) },
+    )
+
+    private fun giveUpItems(entries: List<Pair<LineMerger.Item, Long>>) {
+        if (entries.isEmpty()) return
+        FrameProcessor.forget(entries.map { it.first })
+        entries.map { it.second }.distinct().forEach { RecognizedLog.update(it, RecognizedLog.State.EXPIRED) }
+    }
+
     /** 这些条目没能传出去(过期 / 被挤出 / 清空):首页标"超时未能上传,已丢弃",并让去重器忘掉它们,还在屏幕上的下一帧能重新入队。 */
     private fun giveUp(entries: List<UploadQueue.Entry>) {
         if (entries.isEmpty()) return
@@ -110,6 +138,7 @@ class CaptureService : LifecycleService() {
         }
         // 服务真正起来了(前台通知已显示):建上传引擎、起上传线程。起不来的服务不建,免得留下没人停的线程
         uploader = UploadEngine(ApiUploadSender, uploadListener, log = { Log.w(TAG, it) }).also { it.start() }
+        cloudSender = buildCloudSender().also { it.start() }
         // 真正的"加载标定+绑定摄像头"统一放到 onStartCommand() 里做(见 refreshAndBind()),
         // 不在 onCreate 单独写一份——否则"服务已经在跑,只是想让它重新读一次标定/重新抓一次摄像头"这个
         // 场景没有入口:startForegroundService() 对已存在的服务只会触发 onStartCommand,不会重新走 onCreate。
@@ -223,7 +252,7 @@ class CaptureService : LifecycleService() {
                 lastProcessedAt.set(now)
                 try {
                     // 识别后只入上传队列、立刻返回;限流、失败重试、令牌失效都在上传线程那边处理(uploadListener)
-                    FrameProcessor.process(proxy, cal, up, publishPreview = decision.preview)
+                    FrameProcessor.process(proxy, cal, up, publishPreview = decision.preview, cloud = cloudSender)
                 } finally {
                     proxy.close()
                 }
@@ -265,6 +294,7 @@ class CaptureService : LifecycleService() {
         var next: Int?
         try {
             val resp = Api.heartbeat(buildHeartbeat(this, Heartbeat.STATE_CAPTURING).toJson())
+            CloudOcrState.noteResponse(resp)                          // 0.7.0:安静的直播间没有上传,开关靠心跳也能及时拿到
             next = schedule.onSuccess(resp.optInt("interval", 0))    // 以服务端建议的间隔为准(缺省 60 秒,夹到 30~300)
         } catch (e: Api.ApiError) {
             val verdict = BindingGuard.classify(e)
@@ -322,6 +352,8 @@ class CaptureService : LifecycleService() {
         cameraProvider?.unbindAll()
         io.shutdownNow()
         // 停上传线程、丢掉队列里没传出去的(队列只在内存里,停了就不留):首页标"超时未能上传,已丢弃",去重器忘掉它们
+        cloudSender?.stop()?.let { giveUpItems(it.entries) }
+        cloudSender = null
         uploader?.stop()?.let { giveUp(it) }
         uploader = null
         val hadHeartbeat = hbExec != null

@@ -53,10 +53,13 @@ object FrameProcessor {
      *
      * 识别出的内容记进 RecognizedLog(先标"排队中",上传线程传完 / 放弃后按 id 改状态),首页拿它实时展示"摄像头认出了什么"——
      * 装机/调试时用肉眼比对实际弹幕,比连电脑翻日志方便太多(2026-09-28 加)。 */
-    fun process(proxy: ImageProxy, calibration: Calibration, uploader: UploadEngine, publishPreview: Boolean = false): Result {
+    fun process(proxy: ImageProxy, calibration: Calibration, uploader: UploadEngine, publishPreview: Boolean = false,
+                cloud: CloudFrameSender? = null): Result {
         var diag: DiagFrame? = null            // 诊断包开着时,这一帧的识别细节(ADR-0038);缺省关,开着也只放内存
+        var crop: Bitmap? = null               // 识别用的评论区小图;开了云端识别时,有新弹幕就把它传上去(0.7.0)
         val items: List<LineMerger.Item> = try {
             val f = prepare(proxy, calibration)
+            crop = f.enhanced
             // 预览页打开时顺手发布一份(缩小的拷贝,不影响下面送去识别的原图);发布失败不能影响识别
             if (publishPreview) publishPreview(f.upright, if (PreviewBus.cropWanted) f.enhanced else null, calibration)
             val wantDiag = Diagnostics.enabled
@@ -82,13 +85,31 @@ object FrameProcessor {
         return try {
             val logId = RecognizedLog.add(fresh.map { it.text }, RecognizedLog.State.QUEUED)
             deduper.commit(fresh, now)           // 入队就记账,别让它在屏幕上的这十几秒里每帧都再入队一次
-            uploader.enqueue(fresh, logId)       // 传内容("昵称:" 前缀去掉)+ 读得准的昵称(0.6.1,见 LineMerger.nickOf);怎么传、传没传成见 UploadEngine
+            val jpeg = if (cloud != null && CloudOcrState.enabled) crop?.let { encodeJpeg(it) } else null
+            if (jpeg != null) {
+                // 0.7.0 云端识别:本机认出有新弹幕 → 传这一帧的评论区截图,云端大模型认字;本机认的字一起带上当兜底
+                val dropped = cloud!!.offer(jpeg, fresh, logId)
+                if (dropped.isNotEmpty()) uploader.enqueue(dropped.map { it.first }, dropped.first().second)   // 积压太多挤掉的走文字通道
+            } else {
+                uploader.enqueue(fresh, logId)   // 传内容("昵称:" 前缀去掉)+ 读得准的昵称(0.6.1,见 LineMerger.nickOf);怎么传、传没传成见 UploadEngine
+            }
             Result.OK
         } catch (e: Exception) {
             Log.w(TAG, "入上传队列失败:${e.message}")
             Result.ERROR
         }
     }
+
+    /** 评论区小图 → JPEG(宽超过 [CLOUD_MAX_W] 先等比缩小;云端按像素计费,评论区字不小,960 宽足够)。 */
+    private fun encodeJpeg(src: Bitmap): ByteArray? = try {
+        val bmp = if (src.width > CLOUD_MAX_W) scaledCopy(src, CLOUD_MAX_W) else src
+        java.io.ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.JPEG, 82, it) }.toByteArray()
+    } catch (e: Throwable) {
+        Log.w(TAG, "截图编码失败,这次改传文字:${e.message}")
+        null
+    }
+
+    private const val CLOUD_MAX_W = 960
 
     /** 一帧的三个中间图:摄像头原画面(已转正)→ 摆正后的整屏 → 增强后的弹幕区小图。OCR 和预览共用,保证"预览看到的"就是"识别用的"。 */
     private class Frames(val upright: Bitmap, val front: Bitmap, val enhanced: Bitmap)
