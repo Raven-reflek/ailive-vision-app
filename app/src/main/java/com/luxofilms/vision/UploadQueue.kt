@@ -35,6 +35,8 @@ class UploadQueue(
     /** 冻结的一批:id 一经取走就不变(重试沿用),条目先进先出。 */
     class Batch(val id: String, val entries: List<Entry>) {
         val lines: List<String> get() = entries.map { it.content }
+        /** 与 [lines] 一一对应的昵称(读不准的是 null),2026-10-28 起随内容一起上传。 */
+        val nicks: List<String?> get() = entries.map { it.item.nick }
     }
 
     private val pending = ArrayDeque<Entry>()

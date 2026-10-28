@@ -28,8 +28,10 @@ object LineMerger {
      * 合并后的一条弹幕。
      * text:整条原文(含昵称,首页/预览核对用);content:去掉"昵称:"前缀后的内容(上传用);
      * atEdge:贴着弹幕区上沿或下沿,这一条很可能被裁掉了一截(不完整);rows:合并了几个 OCR 视觉行(诊断用)。
+     * nick:读得准的昵称(2026-10-28,云端念"XX老板"用)——"昵称:"冒号读对了,或行首对上了读对过的昵称才有;
+     * 匿名昵称、系统提示、拿不准的都是 null(云端照旧按匿名处理)。云端还会再查一遍能不能念。
      */
-    data class Item(val text: String, val content: String, val atEdge: Boolean, val rows: Int = 1)
+    data class Item(val text: String, val content: String, val atEdge: Boolean, val rows: Int = 1, val nick: String? = null)
 
     /**
      * 没有"外缩"证据时,行间空隙 ÷ 行高 ≤ 此值才算同一条。2026-10-15 游戏直播间同条内 0.43~0.54、条与条之间 1.0~1.2;
@@ -91,8 +93,30 @@ object LineMerger {
                 content = contentOf(text, nicks),
                 atEdge = g.first().top <= tol || g.last().bottom >= imageHeight - tol,
                 rows = g.size,
+                nick = nickOf(text, nicks),
             )
         }
+    }
+
+    /**
+     * 这一条读得准的昵称,读不准 / 匿名 / 系统提示返回 null。先剥行首计时器(`15:00 小明:能洗车吗`);
+     * 冒号读对了取冒号前那段(去掉粉丝徽章数字);冒号没读对时,行首对上读对过的昵称就用记下的那个(不用这一帧可能读错的字)。
+     */
+    fun nickOf(text: String, nicks: NickMemory? = null): String? {
+        val t = text.trim()
+        if (isSystemLine(t)) return null
+        var s = t
+        val m = TIMER_PREFIX.find(s)
+        if (m != null && m.range.last + 1 < s.length && nickColon(s.substring(m.range.last + 1)) > 0) s = s.substring(m.range.last + 1)
+        val idx = nickColon(s)
+        if (idx > 0) {
+            val nick = s.substring(0, idx).trim().replace(NickMemory.BADGE, "").trim()
+            if (nick.isEmpty() || ANON_NICKS.any { nick.startsWith(it) }) return null
+            if (s.substring(idx + 1).isBlank()) return null
+            return nick
+        }
+        if (stripPrefix(t).second) return null              // 匿名昵称 / 计时器剥掉了:没有可念的名字
+        return nicks?.nickOf(t)
     }
 
     /** 上传用的内容:先剥计时器 / 匿名昵称 / "昵称:";都没有剥掉时,行首是读对过的昵称(冒号丢了)也剥掉。 */

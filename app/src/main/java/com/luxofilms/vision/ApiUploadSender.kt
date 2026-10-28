@@ -15,9 +15,9 @@ import org.json.JSONObject
  * - 其余(网络错误、超时、5xx、`403 + store_disabled`、没有标记的 401/403 ……)→ [SendResult.Failed],一律退避重试、**不解绑**。
  */
 object ApiUploadSender : UploadEngine.Sender {
-    override fun send(lines: List<String>, batchId: String): SendResult {
+    override fun send(lines: List<String>, batchId: String, nicks: List<String?>): SendResult {
         val result = try {
-            fromResponse(Api.visionText(lines, batchId))
+            fromResponse(Api.visionText(lines, batchId, nicks))
         } catch (e: Api.ApiError) {
             fromError(e)
         } catch (e: Exception) {

@@ -17,14 +17,14 @@ import java.util.concurrent.TimeUnit
  * 最后几个用真时钟验证线程壳:Sender 卡住时入队不被拖住、令牌失效只报一次并收工、stop 能收掉线程。
  */
 class UploadEngineTest {
-    private class Call(val lines: List<String>, val batchId: String)
+    private class Call(val lines: List<String>, val batchId: String, val nicks: List<String?> = emptyList())
 
     private class FakeSender : UploadEngine.Sender {
         val calls = CopyOnWriteArrayList<Call>()
         val script = ArrayDeque<SendResult>()            // 按顺序回;用完了回 Ok
         @Volatile var hook: () -> Unit = {}
-        override fun send(lines: List<String>, batchId: String): SendResult {
-            calls.add(Call(lines, batchId))
+        override fun send(lines: List<String>, batchId: String, nicks: List<String?>): SendResult {
+            calls.add(Call(lines, batchId, nicks))
             hook()
             return script.removeFirstOrNull() ?: SendResult.Ok()
         }
@@ -56,7 +56,7 @@ class UploadEngineTest {
     private val logs = CopyOnWriteArrayList<String>()
     private val engine = UploadEngine(sender, listener, { now }, { "b${++idSeq}" }, { logs.add(it) })
 
-    private fun item(i: Int) = LineMerger.Item(text = "昵称$i:弹幕$i", content = "弹幕$i", atEdge = false)
+    private fun item(i: Int) = LineMerger.Item(text = "昵称$i:弹幕$i", content = "弹幕$i", atEdge = false, nick = if (i % 2 == 0) "昵称$i" else null)
     private fun items(from: Int, n: Int) = (from until from + n).map(::item)
     private fun lines(from: Int, n: Int) = (from until from + n).map { "弹幕$it" }
     private fun contents(es: List<UploadQueue.Entry>) = es.map { it.content }
@@ -68,6 +68,7 @@ class UploadEngineTest {
         val wait = engine.step()
         assertEquals(1, sender.calls.size)
         assertEquals(lines(0, 2), sender.calls[0].lines)
+        assertEquals("昵称与内容一一对应,读不准的是 null", listOf("昵称0", null), sender.calls[0].nicks)
         assertEquals("b1", sender.calls[0].batchId)
         val u = listener.uploaded.single()
         assertEquals(lines(0, 2), contents(u.entries))
@@ -313,7 +314,7 @@ class UploadEngineTest {
         val release = CountDownLatch(1)
         val uploaded = CountDownLatch(1)
         val senderThread = java.util.concurrent.atomic.AtomicReference<String>()
-        val blocking = UploadEngine.Sender { _, _ ->
+        val blocking = UploadEngine.Sender { _, _, _ ->
             senderThread.set(Thread.currentThread().name)
             entered.countDown()
             release.await(15, TimeUnit.SECONDS)
@@ -346,7 +347,7 @@ class UploadEngineTest {
         val reported = CountDownLatch(1)
         val rec = Recorder().apply { onTokenInvalid = { reported.countDown() } }
         val sends = java.util.concurrent.atomic.AtomicInteger()
-        val real = UploadEngine({ _, _ -> sends.incrementAndGet(); SendResult.TokenInvalid }, rec)
+        val real = UploadEngine({ _, _, _ -> sends.incrementAndGet(); SendResult.TokenInvalid }, rec)
         real.start()
         try {
             real.enqueue(items(0, 3))
@@ -363,7 +364,7 @@ class UploadEngineTest {
     }
 
     @Test fun threaded_stop_endsTheUploadThread_evenWhenIdle() {
-        val real = UploadEngine({ _, _ -> SendResult.Ok() }, Recorder())
+        val real = UploadEngine({ _, _, _ -> SendResult.Ok() }, Recorder())
         real.start()
         real.start()                                     // 幂等
         assertTrue(Thread.getAllStackTraces().keys.any { it.name == "vision-upload" && it.isAlive })

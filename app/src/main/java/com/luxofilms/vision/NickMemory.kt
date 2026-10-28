@@ -13,43 +13,52 @@ class NickMemory(
     private val max: Int = MAX,
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
-    private class Entry(val norm: String, var at: Long)
+    /** norm:归一化后的昵称(比对用);display:读对冒号那次的原文(去掉徽章数字),上传给云端念用(2026-10-28)。 */
+    private class Entry(val norm: String, var display: String, var at: Long)
 
     private val entries = ArrayList<Entry>()      // 最近用过的在后面
 
     /** 记下一个冒号读对了的昵称(冒号前面那一段原文,可以带徽章数字)。匿名昵称、太短 / 太长的不记。 */
     fun learn(rawNick: String) {
-        val norm = DanmakuDeduper.normalize(rawNick.trim().replace(BADGE, ""))
+        val display = rawNick.trim().replace(BADGE, "").trim()
+        val norm = DanmakuDeduper.normalize(display)
         if (norm.length < MIN_NICK || norm.length > MAX_NICK) return
         val now = clock()
         expire(now)
         val hit = entries.firstOrNull { it.norm == norm }
-        if (hit != null) { hit.at = now; entries.remove(hit); entries.add(hit) } else entries.add(Entry(norm, now))
+        if (hit != null) { hit.at = now; hit.display = display; entries.remove(hit); entries.add(hit) } else entries.add(Entry(norm, display, now))
         while (entries.size > max) entries.removeAt(0)
     }
 
     /** 行首是记过的昵称就返回剥掉昵称与分隔符后的内容;不是、或剥完什么都不剩返回 null。 */
-    fun strip(text: String): String? {
+    fun strip(text: String): String? = match(text)?.second
+
+    /** 行首是记过的昵称时,返回读对冒号那次记下的昵称原文(不是这一帧可能读错的那几个字);否则 null。 */
+    fun nickOf(text: String): String? = match(text)?.first
+
+    fun matches(text: String): Boolean = match(text) != null
+
+    /** (记下的昵称原文, 剥掉昵称后的内容);行首不是记过的昵称、或剥完不剩内容返回 null。 */
+    private fun match(text: String): Pair<String, String>? {
         if (entries.isEmpty()) return null
         expire(clock())
         val body = text.trim().replace(BADGE, "")
         val tn = DanmakuDeduper.normalize(body)
         var bestLen = -1
         var bestSim = 0f
+        var best: Entry? = null
         for (e in entries.asReversed()) {
             for (len in (e.norm.length - 1)..(e.norm.length + 1)) {
                 if (len < MIN_NICK || len > tn.length - 1) continue            // 昵称后面还得剩内容
                 val sim = DanmakuDeduper.similarity(tn.substring(0, len), e.norm)
-                if (sim >= SIMILARITY && sim > bestSim) { bestSim = sim; bestLen = len }
+                if (sim >= SIMILARITY && sim > bestSim) { bestSim = sim; bestLen = len; best = e }
             }
         }
-        if (bestLen < 0) return null
+        if (bestLen < 0 || best == null) return null
         val rest = consume(body, bestLen)
         // 昵称后面至少还得剩 2 个字的内容:剩 1 个字多半是昵称自己少读了一位("月岛出逃指南。" 被当成 "月岛出逃指" + "南")
-        return if (DanmakuDeduper.normalize(rest).length < MIN_REST) null else rest
+        return if (DanmakuDeduper.normalize(rest).length < MIN_REST) null else best.display to rest
     }
-
-    fun matches(text: String): Boolean = strip(text) != null
 
     fun size(): Int = entries.size
 
@@ -78,6 +87,6 @@ class NickMemory(
         const val SIMILARITY = 0.75f
 
         /** 行首粉丝等级徽章的数字:`2`、`O2`、`18`(后面必须紧跟非数字的字,否则整行就是数字)。 */
-        private val BADGE = Regex("^\\s*[Oo０]?[0-9０-９]{1,2}(?=[^0-9０-９\\s])")
+        internal val BADGE = Regex("^\\s*[Oo０]?[0-9０-９]{1,2}(?=[^0-9０-９\\s])")
     }
 }

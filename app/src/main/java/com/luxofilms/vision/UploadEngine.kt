@@ -48,7 +48,8 @@ class UploadEngine(
 
     /** 真正发请求的一方;在上传线程里被同步调用,可以阻塞(整个调用自带 15 秒总超时)。抛出的异常按 `Failed()` 处理。 */
     fun interface Sender {
-        fun send(lines: List<String>, batchId: String): SendResult
+        /** nicks 与 lines 一一对应,读不准的昵称是 null(2026-10-28)。 */
+        fun send(lines: List<String>, batchId: String, nicks: List<String?>): SendResult
     }
 
     interface Listener {
@@ -91,7 +92,7 @@ class UploadEngine(
         if (gone.isNotEmpty()) safely("expired") { listener.expired(gone) }
         val batch = queue.take() ?: return waitOrIdle()
         val result = try {
-            sender.send(batch.lines, batch.id)
+            sender.send(batch.lines, batch.id, batch.nicks)
         } catch (e: Exception) {
             log("上传抛异常,按失败处理:${e.message}")
             SendResult.Failed()

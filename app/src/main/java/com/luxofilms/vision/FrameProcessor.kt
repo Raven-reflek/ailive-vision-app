@@ -82,7 +82,7 @@ object FrameProcessor {
         return try {
             val logId = RecognizedLog.add(fresh.map { it.text }, RecognizedLog.State.QUEUED)
             deduper.commit(fresh, now)           // 入队就记账,别让它在屏幕上的这十几秒里每帧都再入队一次
-            uploader.enqueue(fresh, logId)       // 只传内容,"昵称:" 前缀去掉(昵称 OCR 不可靠,服务端也是固定占位昵称);怎么传、传没传成见 UploadEngine
+            uploader.enqueue(fresh, logId)       // 传内容("昵称:" 前缀去掉)+ 读得准的昵称(0.6.1,见 LineMerger.nickOf);怎么传、传没传成见 UploadEngine
             Result.OK
         } catch (e: Exception) {
             Log.w(TAG, "入上传队列失败:${e.message}")

@@ -15,6 +15,35 @@ class LineMergerTest {
 
     private fun texts(items: List<LineMerger.Item>) = items.map { it.text }
 
+    // ── 昵称(0.6.1):只有读得准的才带上,云端念"XX老板" ──
+    @Test fun nickOf_colonReadCorrectly_givesTheNickname() {
+        assertEquals("小明", LineMerger.nickOf("小明:能洗车吗"))
+        assertEquals("小明", LineMerger.nickOf("2小明:能洗车吗"))                 // 粉丝徽章数字去掉
+        assertEquals("小明", LineMerger.nickOf("15:00 小明:能洗车吗"))           // 行首计时器
+        assertEquals("月岛出逃指南。", LineMerger.nickOf("月岛出逃指南。：介绍一下1号链接"))
+    }
+
+    @Test fun nickOf_unreliableOrAnonymous_isNull() {
+        assertEquals(null, LineMerger.nickOf("能洗车吗"))                         // 没有冒号
+        assertEquals(null, LineMerger.nickOf("抖音用户:能洗车吗"))                // 匿名
+        assertEquals(null, LineMerger.nickOf("00:55抖音用户,能洗车吗"))
+        assertEquals(null, LineMerger.nickOf("今天15:00还营业吗"))                // 时间里的冒号
+        assertEquals(null, LineMerger.nickOf("何武器 来了"))                      // 进场提示:名字由云端从整行抠
+        assertEquals(null, LineMerger.nickOf("小明:"))                            // 冒号后面没内容
+    }
+
+    @Test fun nickOf_colonLost_usesTheRememberedNickname() {
+        val m = NickMemory().apply { learn("月岛出逃指南。") }
+        assertEquals("月岛出逃指南。", LineMerger.nickOf("月乌出逃指南。固驰怎么样", m))
+        assertEquals(null, LineMerger.nickOf("月岛出逃指南。固驰怎么样"), )       // 没记过:不猜
+    }
+
+    @Test fun mergedItemsCarryTheNickname() {
+        val items = LineMerger.merge(listOf(line("小明:能洗车吗", 0, right = 200), line("固驰怎么样", 40, right = 200)), IMG_H)
+        assertEquals(listOf("小明", null), items.map { it.nick })
+        assertEquals(listOf("能洗车吗", "固驰怎么样"), items.map { it.content })
+    }
+
     // ── 核心场景:录屏里的一屏弹幕(含换行) ──
     @Test fun realScreen_wrappedBubblesMergedIntoOneItemEach() {
         val lines = listOf(

@@ -35,6 +35,13 @@ class NickMemoryTest {
         assertNull(m.strip("月岛游客问一下多少钱"))
     }
 
+    @Test fun nickOf_returnsTheNicknameAsReadCorrectly_notThisFramesTypo() {
+        val m = NickMemory().apply { learn("O2月岛出逃指南。") }
+        assertEquals("月岛出逃指南。", m.nickOf("月乌出逃指南。固驰怎么样"))
+        assertNull(m.nickOf("今天几号链接多少钱"))
+        assertNull(NickMemory().nickOf("月岛出逃指南。固驰怎么样"))
+    }
+
     @Test fun nothingLeftAfterTheNickname_isNotAMatch() {
         val m = NickMemory().apply { learn("月岛出逃指南。") }
         assertNull(m.strip("月岛出逃指南。"))
