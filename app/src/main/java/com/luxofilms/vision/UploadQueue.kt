@@ -55,10 +55,11 @@ class UploadQueue(
      * 满了先从冻结批的队首丢(它最旧),在途的那一批不动,从待发队列的队首丢。
      */
     @Synchronized
-    fun enqueue(items: List<LineMerger.Item>, tag: Long = 0L): List<Entry> {
+    fun enqueue(items: List<LineMerger.Item>, tag: Long = 0L, bornAt: Long? = null): List<Entry> {
         if (items.isEmpty()) return emptyList()
         val now = clock()
-        val added = items.map { Entry(it, tag, now) }
+        // bornAt:这几行最早认出来的时刻(截图通道失败转过来的,已经等过一阵),过期按它算,不从入队重新计时
+        val added = items.map { Entry(it, tag, minOf(bornAt ?: now, now)) }
         if (closed) return added
         pending.addAll(added)
         var excess = size - CAPACITY

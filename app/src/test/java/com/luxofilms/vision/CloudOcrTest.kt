@@ -107,4 +107,16 @@ class CloudOcrTest {
         assertEquals(8_000L, CloudFrameSender.backoffMs(RuntimeException("断网"), 3))
         assertEquals(30_000L, CloudFrameSender.backoffMs(RuntimeException("断网"), 9))
     }
+
+    @Test fun slot_jobRemembersWhenItsFirstLineArrived() {
+        val slot = FrameSlot { now }
+        slot.offer(img(1), listOf(item("a")), 1)
+        val t0 = now
+        now += 1_500
+        slot.offer(img(2), listOf(item("b")), 2)
+        now += 5_000
+        assertEquals(t0, slot.take(0)!!.since)
+        slot.offer(img(3), listOf(item("c")), 3)
+        assertEquals("取走后重新计", now, slot.take(0)!!.since)
+    }
 }

@@ -385,4 +385,10 @@ class UploadQueueTest {
         assertEquals(0, q.size)
         assertNull(q.nextWakeMs())
     }
+
+    @Test fun bornAt_keepsTheOriginalAge_soFallbackLinesStillExpireOnTime() {
+        q.enqueue(items(0, 1), bornAt = now - (UploadQueue.TTL_MS - 5_000L))   // 截图通道已经等了 40 秒才转过来
+        advance(5_000L)
+        assertEquals("按最早认出的时刻算过期,不从入队重新计 45 秒", 1, q.expire().size)
+    }
 }

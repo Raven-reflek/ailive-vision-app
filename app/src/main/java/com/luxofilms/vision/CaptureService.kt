@@ -99,7 +99,7 @@ class CaptureService : LifecycleService() {
         fallback = { job ->
             val up = uploader
             if (up == null) giveUpItems(job.entries)
-            else job.entries.groupBy({ it.second }, { it.first }).forEach { (tag, items) -> up.enqueue(items, tag) }
+            else job.entries.groupBy({ it.second }, { it.first }).forEach { (tag, items) -> up.enqueue(items, tag, job.since) }
         },
         log = { Log.w(TAG, it) },
     )

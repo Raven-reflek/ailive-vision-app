@@ -75,9 +75,9 @@ class UploadEngine(
     val queued: Int get() = queue.size
 
     /** 入队(识别线程调,不阻塞、不等网络)。tag 原样挂在条目上,回调时带回来。 */
-    fun enqueue(items: List<LineMerger.Item>, tag: Long = 0L) {
+    fun enqueue(items: List<LineMerger.Item>, tag: Long = 0L, bornAt: Long? = null) {
         if (items.isEmpty()) return
-        val dropped = queue.enqueue(items, tag)
+        val dropped = queue.enqueue(items, tag, bornAt)
         wake.release()
         if (dropped.isNotEmpty()) safely("dropped") { listener.dropped(dropped) }
     }

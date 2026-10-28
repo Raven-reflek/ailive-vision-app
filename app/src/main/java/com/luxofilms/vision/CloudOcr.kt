@@ -38,7 +38,8 @@ object CloudOcrState {
  */
 class FrameSlot(private val clock: () -> Long) {
     /** entries:本机认出的新行 + 它所属的首页识别列表 id(兜底改走文字上传时按 id 分组入队)。 */
-    class Job(val jpeg: ByteArray, val entries: List<Pair<LineMerger.Item, Long>>) {
+    /** since:这一批里最早那行放进来的时刻(兜底转文字上传时过期按它算)。 */
+    class Job(val jpeg: ByteArray, val entries: List<Pair<LineMerger.Item, Long>>, val since: Long = 0L) {
         val items: List<LineMerger.Item> get() = entries.map { it.first }
         val tags: List<Long> get() = entries.map { it.second }.distinct()
     }
@@ -46,11 +47,13 @@ class FrameSlot(private val clock: () -> Long) {
     private var jpeg: ByteArray? = null
     private val entries = ArrayList<Pair<LineMerger.Item, Long>>()
     private var lastSentAt = Long.MIN_VALUE / 2
+    private var since: Long? = null
 
     /** 放进一张新截图(替换还没发的旧截图),本机认出的新行累加。返回因超过 [MAX_ITEMS] 被挤掉的最旧几行。 */
     @Synchronized
     fun offer(image: ByteArray, newItems: List<LineMerger.Item>, tag: Long): List<Pair<LineMerger.Item, Long>> {
         jpeg = image
+        if (since == null && newItems.isNotEmpty()) since = clock()
         newItems.forEach { entries.add(it to tag) }
         val dropped = ArrayList<Pair<LineMerger.Item, Long>>()
         while (entries.size > MAX_ITEMS) dropped.add(entries.removeAt(0))
@@ -76,8 +79,9 @@ class FrameSlot(private val clock: () -> Long) {
     fun clear(): Job? = jpeg?.let { drain(it) }
 
     private fun drain(img: ByteArray): Job {
-        val job = Job(img, entries.toList())
+        val job = Job(img, entries.toList(), since ?: clock())
         jpeg = null
+        since = null
         entries.clear()
         return job
     }
