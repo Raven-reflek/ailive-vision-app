@@ -35,6 +35,7 @@ class CameraAlignActivity : AppCompatActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private val ui = android.os.Handler(android.os.Looper.getMainLooper())
     private var cameraProvider: ProcessCameraProvider? = null
+    private var analysisUseCase: ImageAnalysis? = null   // 标定页自己绑的那一路;退出时只解绑它,不碰采集服务刚绑上的
     private var analysisSize = Pair(0, 0)
 
     @Volatile private var latestFrame: Bitmap? = null   // ImageAnalysis 持续更新的最新一帧(已按屏幕方向摆正)
@@ -112,6 +113,7 @@ class CameraAlignActivity : AppCompatActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
             analysis.setAnalyzer(io) { proxy -> onFrame(proxy) }
+            analysisUseCase = analysis
 
             try {
                 provider.unbindAll()
@@ -270,7 +272,9 @@ class CameraAlignActivity : AppCompatActivity() {
         if (!finishedNormally && CalibrationStore.load() != null && Prefs.captureWanted) {
             CaptureService.resume(this)
         }
-        cameraProvider?.unbindAll()
+        // 只解绑标定页自己的那一路:finishCalibration() 已经让采集服务重新绑了摄像头,onDestroy 一般在下一个页面显示后才执行,
+        // 这里 unbindAll() 会把服务刚绑上的也拆掉 —— 每次标定完 45~60 秒没画面,要等看门狗重绑(2026-10-28 审查)
+        analysisUseCase?.let { cameraProvider?.unbind(it) }
         ui.removeCallbacksAndMessages(null)
         io.shutdownNow()
         super.onDestroy()

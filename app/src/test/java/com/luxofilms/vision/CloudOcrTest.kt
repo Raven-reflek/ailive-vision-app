@@ -64,7 +64,7 @@ class CloudOcrTest {
         var fail = false
         val sender = CloudFrameSender(FrameSlot { now },
             send = { job -> if (fail) throw RuntimeException("断网") else JSONObject().put("cloud", "cloud") },
-            onSent = { job, _ -> sent.add(job) }, fallback = { fellBack.add(it) })
+            onSent = { job, _ -> sent.add(job) }, fallback = { fellBack.add(it) }, clock = { now })
         assertEquals("没东西:空等", CloudFrameSender.IDLE_MS, sender.step())
         sender.offer(img(1), listOf(item("a")), 1)
         assertEquals(0L, sender.step())
@@ -76,5 +76,35 @@ class CloudOcrTest {
         sender.step()
         assertEquals(listOf("b"), fellBack.single().items.map { it.content })
         assertEquals(1, sent.size)
+    }
+
+    @Test fun sender_backsOffAfterFailure_andSendsNewLinesAsTextMeanwhile() {
+        CloudOcrState.noteResponse(JSONObject().put("cloud_ocr", true).put("cloud_min_interval", 2.0))
+        val sent = ArrayList<FrameSlot.Job>()
+        val fellBack = ArrayList<FrameSlot.Job>()
+        var fail = true
+        val sender = CloudFrameSender(FrameSlot { now },
+            send = { if (fail) throw Api.ApiError(429, "慢点", JSONObject().put("retry_after", 10)) else JSONObject() },
+            onSent = { job, _ -> sent.add(job) }, fallback = { fellBack.add(it) }, clock = { now })
+        sender.offer(img(1), listOf(item("a")), 1)
+        sender.step()
+        assertEquals(1, fellBack.size)
+        fail = false
+        now += 3_000
+        sender.offer(img(2), listOf(item("b")), 2)
+        sender.step()
+        assertEquals("429 让歇 10 秒:期间不传截图,新行直接走文字", listOf("b"), fellBack[1].items.map { it.content })
+        assertEquals(0, sent.size)
+        now += 8_000
+        sender.offer(img(3), listOf(item("c")), 3)
+        sender.step()
+        assertEquals("歇够了恢复传截图", 1, sent.size)
+    }
+
+    @Test fun backoff_followsRetryAfterOrDoubles() {
+        assertEquals(10_000L, CloudFrameSender.backoffMs(Api.ApiError(429, "", JSONObject().put("retry_after", 10)), 1))
+        assertEquals(2_000L, CloudFrameSender.backoffMs(RuntimeException("断网"), 1))
+        assertEquals(8_000L, CloudFrameSender.backoffMs(RuntimeException("断网"), 3))
+        assertEquals(30_000L, CloudFrameSender.backoffMs(RuntimeException("断网"), 9))
     }
 }

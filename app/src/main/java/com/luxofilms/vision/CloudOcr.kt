@@ -95,8 +95,13 @@ class CloudFrameSender(
     private val onSent: (FrameSlot.Job, JSONObject) -> Unit,
     private val fallback: (FrameSlot.Job) -> Unit,
     private val log: (String) -> Unit = {},
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val wake = java.util.concurrent.Semaphore(0)
+    // 失败退避(2026-10-28 审查):以前 429 / 5xx / 断网时照样每隔 2 秒传一张 100KB 级截图。现在失败后歇一会儿:
+    // 429 按 Retry-After,其余 2/4/8/15/30 秒;歇着期间有新弹幕直接走文字上传(那边有自己的退避),不攒着等
+    @Volatile private var backoffUntil = 0L
+    private var failStreak = 0
     @Volatile private var running = false
     private var thread: Thread? = null
 
@@ -108,17 +113,30 @@ class CloudFrameSender(
 
     /** 做一轮:到点就发一张,返回下次最多等多少毫秒。测试直接调它,不起线程。 */
     fun step(): Long {
+        val now = clock()
+        if (now < backoffUntil) {
+            val job = slot.take(0L) ?: return minOf(IDLE_MS, backoffUntil - now)
+            safeFallback(job)
+            return 0L
+        }
         val gap = CloudOcrState.minIntervalMs
         val w = slot.waitMs(gap)
         if (w != 0L) return if (w < 0) IDLE_MS else w
         val job = slot.take(gap) ?: return 0L
         try {
             onSent(job, send(job))
+            failStreak = 0
         } catch (e: Exception) {
-            log("截图上传失败,改走文字上传:${e.message}")
-            try { fallback(job) } catch (e2: Exception) { log("兜底入队失败:${e2.message}") }
+            failStreak++
+            backoffUntil = clock() + backoffMs(e, failStreak)
+            log("截图上传失败,改走文字上传,歇 ${(backoffUntil - clock()) / 1000} 秒:${e.message}")
+            safeFallback(job)
         }
         return 0L
+    }
+
+    private fun safeFallback(job: FrameSlot.Job) {
+        try { fallback(job) } catch (e2: Exception) { log("兜底入队失败:${e2.message}") }
     }
 
     @Synchronized
@@ -142,5 +160,15 @@ class CloudFrameSender(
         return slot.clear()
     }
 
-    companion object { const val IDLE_MS = 1_000L }
+    companion object {
+        const val IDLE_MS = 1_000L
+        private val BACKOFF_S = longArrayOf(2, 4, 8, 15, 30)
+
+        /** 失败后歇多久:429 按云端给的秒数(限在 2~65 秒),其余按连续失败次数 2/4/8/15/30 秒。 */
+        fun backoffMs(e: Exception, streak: Int): Long {
+            val ra = (e as? Api.ApiError)?.takeIf { it.code == 429 }?.retryAfterSec
+            if (ra != null) return ra.coerceIn(2, 65) * 1000L
+            return BACKOFF_S[(streak - 1).coerceIn(0, BACKOFF_S.size - 1)] * 1000L
+        }
+    }
 }

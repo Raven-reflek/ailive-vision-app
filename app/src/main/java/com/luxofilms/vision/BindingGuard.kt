@@ -55,6 +55,7 @@ object BindingGuard {
         if (!Prefs.bound) return false
         Prefs.clearBinding(notice)
         DanmakuSourceState.reset()          // 别带着上一家店的弹幕来源状态去绑定下一家
+        CloudOcrState.reset()               // 云端识别开关同理:换绑到没开的店,第一批弹幕别再白传一张截图
         CaptureService.stop(ctx)
         if (alert) Alerts.bindingInvalid(ctx)
         return true
